@@ -362,7 +362,10 @@ class ISO20022Anonymizer(BaseAnonymizer):
             xml_bytes = etree.tostring(
                 root, encoding='UTF-8', pretty_print=True, xml_declaration=True
             )
-            return xml_bytes.decode('utf-8'), self.fields_anonymized
+            #return xml_bytes.decode('utf-8'), self.fields_anonymized
+            xml_str = etree.tostring(root, encoding='unicode', pretty_print=True)
+            result  = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str
+            return result, self.fields_anonymized
 
         except etree.XMLSyntaxError as e:
             logger.error(f"XML Parse-Fehler: {e}")
