@@ -277,87 +277,85 @@ class ISO20022Anonymizer(BaseAnonymizer):
 
         Strategie
         ---------
-        Python >= 3.10  Schema-Validierung via pyiso20022 / xsdata
-        Python <  3.10  Strukturelle Fallback-Validierung via lxml
-                        (pyiso20022/xsdata nutzen ``kw_only`` in @dataclass,
-                        das erst ab Python 3.10 verfügbar ist)
+        Python >= 3.10  Schema-Validierung via pyiso20022 / xsdata.
+        Python <  3.10  Strukturelle Fallback-Validierung via lxml –
+                        pyiso20022/xsdata werden auf diesen Versionen nicht
+                        aufgerufen, da sie intern ``kw_only=True`` in
+                        ``@dataclass`` verwenden (erst ab Python 3.10 gültig).
+
+        Der ``kw_only``-TypeError landet in keinem Fall als Fehlermeldung
+        in ``validation_errors``.  Tritt er trotzdem auf (z.B. durch eine
+        inkompatible Bibliotheksversion), wird er als WARNING geloggt und
+        die strukturelle Validierung übernimmt automatisch.
         """
-        errors = []
+        errors: List[str] = []
 
         try:
             root      = etree.fromstring(content.encode('utf-8'))
             namespace = self._detect_namespace(root)
             msg_type  = self._detect_message_type(namespace)
 
-            if self._pyiso20022_supported():
-                errors.extend(self._validate_with_pyiso20022(content, msg_type))
-            else:
-                logger.warning(
-                    "pyiso20022/xsdata erfordert Python 3.10+ "
-                    "(aktuell: %d.%d) – strukturelle Fallback-Validierung wird verwendet.",
+            # ── Schritt 1: Python-Version prüfen ─────────────────────────────
+            if sys.version_info < (3, 10):
+                logger.info(
+                    "Python %d.%d erkannt – strukturelle ISO-20022-Validierung "
+                    "(pyiso20022 erfordert Python 3.10+).",
                     *sys.version_info[:2]
                 )
                 errors.extend(self._validate_structural(root, namespace, msg_type))
+                return len(errors) == 0, errors
+
+            # ── Schritt 2: pyiso20022 / xsdata (Python >= 3.10) ──────────────
+            try:
+                from xsdata.formats.dataclass.parsers import XmlParser
+                from xsdata.formats.dataclass.parsers.config import ParserConfig
+
+                parser         = XmlParser(
+                    config=ParserConfig(fail_on_unknown_properties=False)
+                )
+                document_class = self._get_document_class(msg_type)
+
+                if document_class:
+                    parser.from_string(content, document_class)
+                    logger.info("Schema-Validierung erfolgreich für %s.", msg_type)
+                else:
+                    errors.append(
+                        f"Kein pyiso20022-Schema für Nachrichtentyp "
+                        f"'{msg_type}' verfügbar."
+                    )
+
+            except ImportError as e:
+                # pyiso20022 / xsdata nicht installiert → struktureller Fallback
+                logger.warning(
+                    "pyiso20022/xsdata nicht installiert (%s) – "
+                    "strukturelle Validierung als Fallback.",
+                    e
+                )
+                errors.extend(self._validate_structural(root, namespace, msg_type))
+
+            except TypeError as e:
+                # Sicherheitsnetz: kw_only-Fehler trotz Python >= 3.10
+                # (z.B. inkompatible xsdata-Version) → kein INVALID, kein
+                # kw_only im Log → struktureller Fallback übernimmt.
+                if 'kw_only' in str(e):
+                    logger.warning(
+                        "pyiso20022 nicht kompatibel (kw_only) – "
+                        "strukturelle Validierung als Fallback."
+                    )
+                    errors.extend(
+                        self._validate_structural(root, namespace, msg_type)
+                    )
+                else:
+                    errors.append(f"TypeError bei Schema-Validierung: {e}")
+
+            except Exception as e:
+                errors.append(f"Schema-Validierungsfehler: {e}")
 
             return len(errors) == 0, errors
 
         except etree.XMLSyntaxError as e:
             errors.append(f"XML-Syntaxfehler: {str(e)}")
             return False, errors
-
-    # ── Hilfsmethoden Validierung ─────────────────────────────────────────────
-
-    @staticmethod
-    def _pyiso20022_supported() -> bool:
-        """True wenn die laufende Python-Version pyiso20022/xsdata unterstützt."""
-        import sys as _sys
-        return _sys.version_info >= (3, 10)
-
-    def _validate_with_pyiso20022(self, content: str,
-                                   msg_type: str) -> List[str]:
-        """
-        Schema-Validierung via pyiso20022 / xsdata (Python >= 3.10).
-
-        Fängt ``TypeError`` mit dem Text 'kw_only' als Sicherheitsnetz ab,
-        falls doch eine inkompatible Python-Version durchgerutscht ist.
-        """
-        errors = []
-        try:
-            from xsdata.formats.dataclass.parsers import XmlParser
-            from xsdata.formats.dataclass.parsers.config import ParserConfig
-
-            parser         = XmlParser(config=ParserConfig(fail_on_unknown_properties=False))
-            document_class = self._get_document_class(msg_type)
-
-            if document_class:
-                parser.from_string(content, document_class)
-                logger.info("Schema-Validierung erfolgreich für %s", msg_type)
-            else:
-                errors.append(
-                    f"Kein pyiso20022-Schema für Nachrichtentyp '{msg_type}' verfügbar."
-                )
-
-        except ImportError as e:
-            logger.warning("pyiso20022 nicht installiert: %s", e)
-            errors.append(
-                "pyiso20022/xsdata nicht installiert – "
-                "nur XML-Syntax wurde geprüft. "
-                "Installation: pip install pyiso20022 xsdata"
-            )
-        except TypeError as e:
-            # Sicherheitsnetz: kw_only-Fehler auf unerwarteter Python-Version
-            if 'kw_only' in str(e):
-                errors.append(
-                    f"pyiso20022 erfordert Python 3.10+ "
-                    f"(aktuell: {sys.version_info.major}.{sys.version_info.minor}). "
-                    f"Bitte Python aktualisieren oder validate_after: false setzen."
-                )
-            else:
-                errors.append(f"Schema-Validierungsfehler (TypeError): {e}")
-        except Exception as e:
-            errors.append(f"Schema-Validierungsfehler: {e}")
-
-        return errors
 
     def _validate_structural(self, root: etree._Element,
                               namespace: Optional[str],
