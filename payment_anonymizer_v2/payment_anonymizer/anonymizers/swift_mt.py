@@ -178,3 +178,15 @@ class SwiftMTAnonymizer(BaseAnonymizer):
             errors.append("Keine gültigen SWIFT-Feldtags gefunden")
 
         return len(errors) == 0, errors
+
+    def extract_message_id(self, content: str) -> str:
+        """
+        Extrahiert die Transaction Reference Number aus dem :20:-Feld.
+
+        Das :20:-Feld ist der eindeutige technische Bezeichner einer SWIFT-
+        MT-Nachricht (Transaction Reference Number) und wird nicht anonymisiert.
+        """
+        match = re.search(r':20:([^\r\n]+)', content)
+        if match:
+            return match.group(1).strip()
+        return ""

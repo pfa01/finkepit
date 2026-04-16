@@ -116,6 +116,8 @@ class ResultLogger:
 
         Spalten:
             Input File  – Quelldatei der Nachricht
+            Message ID  – Eindeutige Nachrichten-ID
+                          (ISO 20022: GrpHdr/MsgId | SWIFT MT: :20: Feld)
             Field Type  – Typ des ersetzten Feldes (NAME, IBAN, BIC, …)
             Alt Wert    – Originalwert vor der Anonymisierung
             Neuer Wert  – Ersatzwert nach der Anonymisierung
@@ -132,11 +134,14 @@ class ResultLogger:
         log_file = self.log_path / f"anonymization_detail_log_{timestamp}.csv"
         with open(log_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f, delimiter=';')
-            writer.writerow(['Input File', 'Field Type', 'Alt Wert', 'Neuer Wert'])
+            writer.writerow([
+                'Input File', 'Message ID', 'Field Type', 'Alt Wert', 'Neuer Wert'
+            ])
             for r in self.results:
                 for mapping in r.mappings:
                     writer.writerow([
                         r.input_file,
+                        r.message_id,
                         mapping.field_type,
                         mapping.original,
                         mapping.anonymized,

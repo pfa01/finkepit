@@ -29,5 +29,8 @@ class AnonymizationResult:
     validation_errors: List[str] = field(default_factory=list)
     error_message: str = ""
     processing_time_ms: float = 0.0
+    # Eindeutige Nachrichten-ID zur Identifikation im Detail-Log
+    # ISO 20022: GrpHdr/MsgId  |  SWIFT MT: :20: Transaction Reference
+    message_id: str = ""
     # Alle Ersetzungen dieser Datei (befüllt nach erfolgreicher Anonymisierung)
     mappings: List[FieldMapping] = field(default_factory=list)

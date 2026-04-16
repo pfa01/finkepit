@@ -462,3 +462,23 @@ class ISO20022Anonymizer(BaseAnonymizer):
         except ImportError:
             pass
         return None
+
+    def extract_message_id(self, content: str) -> str:
+        """
+        Extrahiert die MsgId aus dem GrpHdr-Element.
+
+        Die MsgId ist der eindeutige technische Bezeichner einer ISO-20022-
+        Nachricht und wird nicht anonymisiert.
+        Enthält die Nachricht mehrere GrpHdr-Elemente (z.B. AppHdr + Document),
+        wird der erste gefundene Wert zurückgegeben.
+        """
+        try:
+            root  = etree.fromstring(content.encode('utf-8'))
+            elems = root.xpath(
+                ".//*[local-name()='GrpHdr']/*[local-name()='MsgId']"
+            )
+            if elems and elems[0].text:
+                return elems[0].text.strip()
+        except Exception as e:
+            logger.debug("MsgId konnte nicht extrahiert werden: %s", e)
+        return ""

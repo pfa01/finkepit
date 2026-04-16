@@ -98,6 +98,7 @@ class PaymentAnonymizer:
                 result.error_message = 'Unbekannter Dateityp'
                 return result
 
+            result.message_id = anonymizer.extract_message_id(content)
             anonymizer.reset()
             anonymized_content, fields_count = anonymizer.anonymize(content)
             result.fields_anonymized = fields_count

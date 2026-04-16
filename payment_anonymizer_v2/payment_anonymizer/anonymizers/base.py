@@ -64,3 +64,15 @@ class BaseAnonymizer(ABC):
     def validate(self, content: str) -> Tuple[bool, List[str]]:
         """Validiert den Inhalt und gibt (Erfolg, Fehler) zurück."""
         pass
+
+    def extract_message_id(self, content: str) -> str:
+        """
+        Extrahiert die eindeutige Nachrichten-ID.
+
+        Wird von Subklassen überschrieben:
+        - ISO20022Anonymizer  →  GrpHdr/MsgId
+        - SwiftMTAnonymizer   →  :20: Transaction Reference Number
+
+        Gibt einen leeren String zurück wenn keine ID gefunden wird.
+        """
+        return ""
