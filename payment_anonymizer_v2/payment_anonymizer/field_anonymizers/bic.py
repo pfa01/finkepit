@@ -37,3 +37,20 @@ class BICFieldAnonymizer(BaseFieldAnonymizer):
                 'bic', self.config.get_default()['bic']
             )
         )
+
+    def anonymize_with_entity(self, original: str, entity: dict) -> str:
+        """
+        Anonymisiert einen BIC mit einer vorgegebenen Entität.
+
+        Verwendet den BIC aus dem Entitätsdatensatz statt des allgemeinen
+        Entity-Pools, so dass BIC und Name einer Partei zusammengehören.
+        """
+        if not original:
+            return original
+        if not self.is_enabled:
+            return original
+
+        dummy_bic = entity.get('bic', self.config.get_default()['bic'])
+        return self._get_or_create_mapping(
+            original, 'BIC', lambda x: dummy_bic
+        )

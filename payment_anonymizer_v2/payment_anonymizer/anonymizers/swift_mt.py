@@ -70,31 +70,60 @@ class SwiftMTAnonymizer(BaseAnonymizer):
 
     def _anonymize_party_field(self, content: str, field_type: str) -> str:
         """
-        Anonymisiert ein Party-Feld (Name + Adresszeilen) zeilenweise.
-        Delegiert die Feld-spezifische Logik an die jeweiligen Feld-Anonymisierer.
+        Anonymisiert ein Party-Feld (Name + Adresszeilen + BIC/IBAN) zeilenweise.
+
+        Partei-weise Logik
+        ------------------
+        1. Name aus Zeile 0 extrahieren → Entität über Config zuweisen.
+        2. Alle Felder dieses Party-Felds (Name, Adresse, BIC, IBAN) verwenden
+           dieselbe Entität, damit zusammengehörige Daten konsistent ersetzt werden.
         """
         lines = content.split('\n')
         anonymized_lines = []
 
+        # ── Entität bestimmen (einmalig pro Party-Feld) ───────────────────
+        original_name = None
+        if lines:
+            first_line = lines[0].strip()
+            if (first_line
+                    and not first_line.startswith('/')
+                    and not self.BIC_PATTERN.match(first_line)
+                    and not self.IBAN_PATTERN.match(first_line)):
+                original_name = first_line
+
+        is_company = (
+            original_name is not None
+            and self.name_anonymizer._is_company(original_name)
+        )
+        if original_name:
+            entity = self.config.get_or_assign_entity(original_name, is_company)
+        else:
+            entity = self.config.get_next_entity()
+
+        # ── Zeilen verarbeiten ────────────────────────────────────────────
         for i, line in enumerate(lines):
 
-            # BIC in der Zeile ersetzen
+            # BIC in der Zeile mit Entitäts-BIC ersetzen
             if self.bic_anonymizer.is_enabled and self.BIC_PATTERN.search(line):
                 line = self.BIC_PATTERN.sub(
-                    lambda m: self.bic_anonymizer.anonymize(m.group(0)),
+                    lambda m, e=entity: self.bic_anonymizer.anonymize_with_entity(
+                        m.group(0), e
+                    ),
                     line
                 )
                 self.fields_anonymized += 1
 
-            # IBAN in der Zeile ersetzen
+            # IBAN in der Zeile mit Entitäts-IBAN ersetzen
             if self.iban_anonymizer.is_enabled and self.IBAN_PATTERN.search(line):
                 line = self.IBAN_PATTERN.sub(
-                    lambda m: self.iban_anonymizer.anonymize(m.group(0)),
+                    lambda m, e=entity: self.iban_anonymizer.anonymize_with_entity(
+                        m.group(0), e
+                    ),
                     line
                 )
                 self.fields_anonymized += 1
 
-            # Erste Zeile: Name (sofern kein BIC / keine IBAN)
+            # Zeile 0: Name mit Entitäts-Name ersetzen
             if (
                 self.name_anonymizer.is_enabled
                 and i == 0
@@ -102,10 +131,12 @@ class SwiftMTAnonymizer(BaseAnonymizer):
                 and not self.IBAN_PATTERN.match(line)
             ):
                 if line.strip() and not line.startswith('/'):
-                    line = self.name_anonymizer.anonymize(line.strip())
+                    line = self.name_anonymizer.anonymize_with_entity(
+                        line.strip(), entity, is_company
+                    )
                     self.fields_anonymized += 1
 
-            # Folgezeilen: Adresse (sofern kein BIC)
+            # Folgezeilen: Adresse mit Entitäts-Adresse ersetzen
             if (
                 self.address_anonymizer.is_enabled
                 and i > 0

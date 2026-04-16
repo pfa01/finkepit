@@ -11,40 +11,26 @@ neue Original→Dummy-Zuordnung um 1 erhöht wird (Round-Robin). Dadurch ist
 die Reihenfolge der Ersetzungen innerhalb eines Dokuments vollständig
 deterministisch und nachvollziehbar.
 
-Config-Struktur (dummy_data)
-----------------------------
-  default   – vollständiger Fallback-Datensatz; wird verwendet wenn
-              kein Pool-Eintrag vorhanden ist.
-  persons   – Liste von Person-Entitäten (Name, IBAN, BIC, Adresse,
-              Kontakt, Verwendungszweck)
-  companies – Liste von Firmen-Entitäten (gleiche Felder, Firmenname
-              statt Vor-/Nachname)
-  remittance_texts – eigenständiger Fallback-Pool für Verwendungszwecke
-
-Jede Entität im Pool ist ein vollständig in sich geschlossener Datensatz.
-Es gibt keine getrennten Pools für IBANs, BICs oder Adressen.
+Partei-weise Zuordnung
+-----------------------
+``get_or_assign_entity(name, is_company)`` stellt sicher, dass derselbe
+Originalname innerhalb einer Datei immer dieselbe Entität erhält.
+So werden Name, IBAN, BIC und Adresse einer Partei konsistent aus einem
+einzigen Datensatz bezogen.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from .iban_utils import IBANGenerator
 
 logger = logging.getLogger(__name__)
 
 
 class Config:
-    """
-    Konfigurationsmanager.
-
-    Indizes
-    -------
-    _person_index    – Round-Robin-Index für den Personen-Pool
-    _company_index   – Round-Robin-Index für den Firmen-Pool
-    _entity_index    – gemeinsamer Index für feldtyp-agnostische Abfragen
-                       (IBAN, BIC, Adresse, Kontakt)
-    _remittance_index – Round-Robin-Index für den Verwendungszweck-Pool
-    """
+    """Konfigurationsmanager."""
 
     def __init__(self, config_path: str):
         self.config_path = Path(config_path)
@@ -54,20 +40,20 @@ class Config:
         self._company_index = 0
         self._entity_index = 0
         self._remittance_index = 0
+        # Name → Entität-Zuordnung (wird pro Datei zurückgesetzt)
+        self._entity_assignments: Dict[str, Dict[str, Any]] = {}
 
     # -------------------------------------------------------------------------
     # Laden & Validierung
     # -------------------------------------------------------------------------
 
     def _load_config(self) -> Dict[str, Any]:
-        """Lädt die JSON-Konfiguration."""
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config nicht gefunden: {self.config_path}")
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
     def _validate_default(self):
-        """Stellt sicher, dass der Default-Eintrag vollständig ist."""
         required = {'first_name', 'last_name', 'company_name', 'iban', 'bic',
                     'address', 'email', 'phone', 'remittance'}
         default = self.data.get('dummy_data', {}).get('default', {})
@@ -118,28 +104,44 @@ class Config:
     # -------------------------------------------------------------------------
 
     def get_default(self) -> Dict[str, Any]:
-        """
-        Gibt den Default-Datensatz zurück.
-
-        Der Default wird verwendet wenn:
-        - ein Pool leer ist
-        - keine passende Entität gefunden wird
-        Er enthält alle Felder einer Entität vollständig.
-        """
+        """Gibt den Default-Datensatz zurück (immer verfügbar als Fallback)."""
         return self.data['dummy_data']['default']
+
+    # -------------------------------------------------------------------------
+    # Partei-weise Entitätszuordnung  ←  NEU
+    # -------------------------------------------------------------------------
+
+    def get_or_assign_entity(self, original_name: str,
+                              is_company: bool) -> Dict[str, Any]:
+        """
+        Gibt die Entität zurück, die diesem Namen zugeordnet wurde.
+
+        Neue Namen erhalten die nächste Entität aus dem passenden Pool
+        (Round-Robin). Wird derselbe Name erneut aufgerufen, kommt immer
+        dieselbe Entität zurück → Name, IBAN, BIC und Adresse einer Partei
+        stammen garantiert aus demselben Datensatz.
+
+        Parameters
+        ----------
+        original_name : str
+            Originalname (Personen- oder Firmenname) vor der Anonymisierung.
+        is_company : bool
+            True → Firmen-Pool, False → Personen-Pool.
+        """
+        prefix = 'CO' if is_company else 'PE'
+        key = f"{prefix}:{original_name}"
+        if key not in self._entity_assignments:
+            if is_company:
+                self._entity_assignments[key] = self.get_next_company_entity()
+            else:
+                self._entity_assignments[key] = self.get_next_person_entity()
+        return self._entity_assignments[key]
 
     # -------------------------------------------------------------------------
     # Personen-Pool
     # -------------------------------------------------------------------------
 
     def get_next_person_entity(self) -> Dict[str, Any]:
-        """
-        Gibt die nächste Personen-Entität zurück (Round-Robin).
-
-        Enthält: first_name, last_name, iban, bic, address, email,
-                 phone, remittance.
-        Fallback: Default-Entität.
-        """
         persons = self.data['dummy_data'].get('persons', [])
         if not persons:
             logger.warning("Personen-Pool leer – verwende Default.")
@@ -149,17 +151,11 @@ class Config:
         return entity
 
     def _person_entity_from_default(self) -> Dict[str, Any]:
-        """Erstellt eine Personen-Entität aus dem Default-Eintrag."""
         d = self.get_default()
         return {
-            'first_name': d['first_name'],
-            'last_name':  d['last_name'],
-            'iban':       d['iban'],
-            'bic':        d['bic'],
-            'address':    d['address'],
-            'email':      d['email'],
-            'phone':      d['phone'],
-            'remittance': d['remittance'],
+            'first_name': d['first_name'], 'last_name': d['last_name'],
+            'iban': d['iban'], 'bic': d['bic'], 'address': d['address'],
+            'email': d['email'], 'phone': d['phone'], 'remittance': d['remittance'],
         }
 
     # -------------------------------------------------------------------------
@@ -167,12 +163,6 @@ class Config:
     # -------------------------------------------------------------------------
 
     def get_next_company_entity(self) -> Dict[str, Any]:
-        """
-        Gibt die nächste Firmen-Entität zurück (Round-Robin).
-
-        Enthält: name, iban, bic, address, email, phone, remittance.
-        Fallback: Default-Entität.
-        """
         companies = self.data['dummy_data'].get('companies', [])
         if not companies:
             logger.warning("Firmen-Pool leer – verwende Default.")
@@ -182,15 +172,10 @@ class Config:
         return entity
 
     def _company_entity_from_default(self) -> Dict[str, Any]:
-        """Erstellt eine Firmen-Entität aus dem Default-Eintrag."""
         d = self.get_default()
         return {
-            'name':       d['company_name'],
-            'iban':       d['iban'],
-            'bic':        d['bic'],
-            'address':    d['address'],
-            'email':      d['email'],
-            'phone':      d['phone'],
+            'name': d['company_name'], 'iban': d['iban'], 'bic': d['bic'],
+            'address': d['address'], 'email': d['email'], 'phone': d['phone'],
             'remittance': d['remittance'],
         }
 
@@ -199,22 +184,12 @@ class Config:
     # -------------------------------------------------------------------------
 
     def get_next_entity(self) -> Dict[str, Any]:
-        """
-        Gibt die nächste Entität aus dem kombinierten Pool zurück (Round-Robin).
-
-        Wird von feldtyp-agnostischen Anonymisierern genutzt (IBAN, BIC,
-        Adresse, Kontakt), bei denen kein Personen/Firmen-Kontext bekannt ist.
-        Pool = persons + companies in Konfigurationsreihenfolge.
-        Fallback: Default-Entität.
-        """
+        """Round-Robin über Persons + Companies (für Felder ohne Partei-Kontext)."""
         persons   = self.data['dummy_data'].get('persons', [])
         companies = self.data['dummy_data'].get('companies', [])
         all_entities = persons + companies
-
         if not all_entities:
-            logger.warning("Kombinierter Entity-Pool leer – verwende Default.")
             return self.get_default()
-
         entity = all_entities[self._entity_index % len(all_entities)]
         self._entity_index += 1
         return entity
@@ -224,14 +199,8 @@ class Config:
     # -------------------------------------------------------------------------
 
     def get_next_remittance(self) -> str:
-        """
-        Gibt den nächsten Verwendungszweck zurück (Round-Robin).
-
-        Fallback: Default-Remittance.
-        """
         texts = self.data['dummy_data'].get('remittance_texts', [])
         if not texts:
-            logger.warning("Verwendungszweck-Pool leer – verwende Default.")
             return self.get_default()['remittance']
         text = texts[self._remittance_index % len(texts)]
         self._remittance_index += 1
@@ -242,11 +211,12 @@ class Config:
     # -------------------------------------------------------------------------
 
     def reset_indices(self):
-        """Setzt alle Indizes zurück (für neue Datei)."""
+        """Setzt alle Indizes und Zuordnungen zurück (für neue Datei)."""
         self._person_index = 0
         self._company_index = 0
         self._entity_index = 0
         self._remittance_index = 0
+        self._entity_assignments = {}     # Partei-Zuordnungen ebenfalls löschen
 
     # -------------------------------------------------------------------------
     # Pfad-Konfiguration

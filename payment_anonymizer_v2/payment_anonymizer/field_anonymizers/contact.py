@@ -44,3 +44,25 @@ class ContactFieldAnonymizer(BaseFieldAnonymizer):
         if contact_type == 'phone':
             return entity.get('phone', default['phone'])
         return f"ANONYMIZED_{counter}"
+
+    def anonymize_with_entity(self, original: str, entity: dict,
+                               contact_type: str = 'generic') -> str:
+        """
+        Anonymisiert Kontaktdaten mit einer vorgegebenen Entität.
+
+        Parameters
+        ----------
+        contact_type : str
+            'email' | 'phone' | 'generic'
+        """
+        if not original:
+            return original
+        if not self.is_enabled:
+            return original
+
+        default = self.config.get_default()
+        if contact_type == 'email':
+            return entity.get('email', default['email'])
+        if contact_type == 'phone':
+            return entity.get('phone', default['phone'])
+        return original

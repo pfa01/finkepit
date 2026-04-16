@@ -55,3 +55,31 @@ class NameFieldAnonymizer(BaseFieldAnonymizer):
         """Ruft die Entität einmalig ab, um den Index nur einmal zu erhöhen."""
         entity = self.config.get_next_person_entity()
         return f"{entity['first_name']} {entity['last_name']}"
+
+    def anonymize_with_entity(self, original: str, entity: dict,
+                               is_company: bool) -> str:
+        """
+        Anonymisiert einen Namen mit einer vorgegebenen Entität.
+
+        Wird bei der partei-weisen Verarbeitung aufgerufen, damit Name,
+        IBAN, BIC und Adresse einer Partei aus demselben Datensatz stammen.
+        Die Konsistenzgarantie (gleicher Original → gleicher Dummy) bleibt
+        durch das Mappings-Dict erhalten.
+        """
+        if not original or not original.strip():
+            return original
+        if not self.is_enabled:
+            return original
+
+        if is_company:
+            new_name   = entity.get('name', self.config.get_default()['company_name'])
+            field_type = 'COMPANY'
+        else:
+            first = entity.get('first_name', '')
+            last  = entity.get('last_name', '')
+            new_name   = f"{first} {last}".strip()
+            field_type = 'NAME'
+
+        return self._get_or_create_mapping(
+            original, field_type, lambda x: new_name
+        )

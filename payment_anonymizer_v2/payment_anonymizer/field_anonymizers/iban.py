@@ -39,3 +39,21 @@ class IBANFieldAnonymizer(BaseFieldAnonymizer):
                 'iban', self.config.get_default()['iban']
             )
         )
+
+    def anonymize_with_entity(self, original: str, entity: dict) -> str:
+        """
+        Anonymisiert eine IBAN mit einer vorgegebenen Entität.
+
+        Verwendet die IBAN aus dem Entitätsdatensatz statt des allgemeinen
+        Entity-Pools, so dass IBAN und Name einer Partei zusammengehören.
+        """
+        if not original or len(original) < 2:
+            return original
+        if not self.is_enabled:
+            return original
+
+        original_clean = original.replace(" ", "").upper()
+        dummy_iban = entity.get('iban', self.config.get_default()['iban'])
+        return self._get_or_create_mapping(
+            original_clean, 'IBAN', lambda x: dummy_iban
+        )

@@ -133,122 +133,234 @@ class ISO20022Anonymizer(BaseAnonymizer):
     # Anonymisierung
     # -------------------------------------------------------------------------
 
+    # ── Partei-Gruppen ────────────────────────────────────────────────────────
+    # Jeder Eintrag: (Partei-Tag, Konto-Tag, Agenten-Tag)
+    # Konto enthält die IBAN, Agent enthält den BIC der Bank.
+    # None bedeutet: kein eigenständiges Geschwister-Element vorhanden.
+    PARTY_GROUPS = [
+        ('Dbtr',       'DbtrAcct',       'DbtrAgt'),
+        ('Cdtr',       'CdtrAcct',       'CdtrAgt'),
+        ('InitgPty',   None,             None),
+        ('UltmtDbtr',  None,             None),
+        ('UltmtCdtr',  None,             None),
+        ('IntrmyAgt1', 'IntrmyAgt1Acct', None),
+        ('IntrmyAgt2', 'IntrmyAgt2Acct', None),
+        ('IntrmyAgt3', 'IntrmyAgt3Acct', None),
+        ('InstgAgt',   None,             None),
+        ('InstdAgt',   None,             None),
+    ]
+
+    def _anonymize_party_group(self, party_elem: etree._Element,
+                                account_elem: Optional[etree._Element],
+                                agent_elem:   Optional[etree._Element],
+                                processed_ids: set) -> None:
+        """
+        Anonymisiert alle Felder einer Partei mit einer einzigen Entität.
+
+        Ablauf
+        ------
+        1. Name aus party_elem extrahieren → Entität über Config zuweisen
+        2. Namen, Adresse, Kontakt im party_elem ersetzen
+        3. IBAN im account_elem ersetzen
+        4. BIC im agent_elem ersetzen
+        Alle bearbeiteten Elemente werden in ``processed_ids`` eingetragen,
+        damit Schritt 2 der anonymize()-Methode sie nicht doppelt verarbeitet.
+        """
+        # ── 1. Name & Entität ────────────────────────────────────────────
+        name_elems = party_elem.xpath(".//*[local-name()='Nm']")
+        # Für Finanzinstitute (FinInstnId/Nm) immer als Firma behandeln
+        fin_names  = party_elem.xpath(
+            ".//*[local-name()='FinInstnId']/*[local-name()='Nm']"
+        )
+
+        original_name = None
+        if name_elems and name_elems[0].text and name_elems[0].text.strip():
+            original_name = name_elems[0].text.strip()
+
+        is_company = bool(fin_names) or (
+            original_name is not None and self.name_anonymizer._is_company(original_name)
+        )
+
+        if original_name:
+            entity = self.config.get_or_assign_entity(original_name, is_company)
+        else:
+            entity = self.config.get_next_entity()
+
+        # ── 2a. Namen ersetzen ───────────────────────────────────────────
+        if self.name_anonymizer.is_enabled:
+            for nm_elem in name_elems:
+                if nm_elem.text and nm_elem.text.strip():
+                    nm_elem.text = self.name_anonymizer.anonymize_with_entity(
+                        nm_elem.text.strip(), entity, is_company
+                    )
+                    processed_ids.add(id(nm_elem))
+                    self.fields_anonymized += 1
+
+        # ── 2b. Adresse ersetzen ─────────────────────────────────────────
+        if self.address_anonymizer.is_enabled:
+            for tag, ft in [('StrtNm','street'),('PstCd','postal'),
+                             ('TwnNm','city'),('Ctry','country')]:
+                for elem in party_elem.xpath(f".//*[local-name()='{tag}']"):
+                    if elem.text:
+                        elem.text = self.address_anonymizer.anonymize_with_entity(
+                            elem.text, entity, field_type=ft
+                        )
+                        processed_ids.add(id(elem))
+                        self.fields_anonymized += 1
+            for elem in party_elem.xpath(".//*[local-name()='AdrLine']"):
+                if elem.text:
+                    elem.text = self.address_anonymizer.anonymize_line_with_entity(
+                        elem.text, entity
+                    )
+                    processed_ids.add(id(elem))
+                    self.fields_anonymized += 1
+
+        # ── 2c. Kontaktdaten ersetzen ────────────────────────────────────
+        if self.contact_anonymizer.is_enabled:
+            for tag, ct in self._CONTACT_TYPE_MAP.items():
+                for elem in party_elem.xpath(f".//*[local-name()='{tag}']"):
+                    if elem.text:
+                        elem.text = self.contact_anonymizer.anonymize_with_entity(
+                            elem.text, entity, contact_type=ct
+                        )
+                        processed_ids.add(id(elem))
+                        self.fields_anonymized += 1
+
+        # ── 3. IBAN aus Konto-Element ────────────────────────────────────
+        if account_elem is not None and self.iban_anonymizer.is_enabled:
+            for elem in account_elem.xpath(".//*[local-name()='IBAN']"):
+                if elem.text:
+                    elem.text = self.iban_anonymizer.anonymize_with_entity(
+                        elem.text, entity
+                    )
+                    processed_ids.add(id(elem))
+                    self.fields_anonymized += 1
+
+        # ── 4. BIC aus Agenten-Element ───────────────────────────────────
+        if agent_elem is not None and self.bic_anonymizer.is_enabled:
+            for bic_tag in ('BICFI', 'BIC'):
+                for elem in agent_elem.xpath(f".//*[local-name()='{bic_tag}']"):
+                    if elem.text:
+                        elem.text = self.bic_anonymizer.anonymize_with_entity(
+                            elem.text, entity
+                        )
+                        processed_ids.add(id(elem))
+                        self.fields_anonymized += 1
+
     def anonymize(self, content: str) -> Tuple[str, int]:
-        """Anonymisiert eine ISO 20022 XML-Nachricht."""
+        """
+        Anonymisiert eine ISO 20022 XML-Nachricht.
+
+        Verarbeitungsreihenfolge
+        -----------------------
+        Schritt 1 – Partei-weise: Jede Partei (Dbtr, Cdtr, …) wird komplett
+                    verarbeitet bevor die nächste beginnt. Name, IBAN, BIC,
+                    Adresse und Kontaktdaten einer Partei stammen aus demselben
+                    Entitätsdatensatz der Konfiguration.
+        Schritt 2 – Dokument-weise: Felder ohne Partei-Kontext (Verwendungs-
+                    zweck, Private IDs, eventuell verbliebene IBANs/BICs).
+        """
         self.fields_anonymized = 0
+        processed_ids: set = set()   # verhindert Doppelverarbeitung
 
         try:
             root = etree.fromstring(content.encode('utf-8'))
-            namespace = self._detect_namespace(root)
-            ns_map = {'ns': namespace} if namespace else {}
 
-            def find_elements(xpath_expr: str):
-                """Findet Elemente mit oder ohne Namespace."""
-                if namespace:
-                    if xpath_expr.startswith('.//'):
-                        elem_path = xpath_expr[3:]
-                        if '/' in elem_path:
-                            parts = elem_path.split('/')
-                            local_xpath = './/' + '/'.join(
-                                [f"*[local-name()='{p}']" for p in parts]
-                            )
-                        else:
-                            local_xpath = f".//*[local-name()='{elem_path}']"
-                        return root.xpath(local_xpath)
-                    else:
-                        ns_xpath = xpath_expr.replace('.//', './/ns:')
-                        return root.xpath(ns_xpath, namespaces=ns_map)
-                return root.xpath(xpath_expr)
+            def by_local_name(tag: str):
+                """Alle Elemente mit diesem local-name im Dokument."""
+                return root.xpath(f".//*[local-name()='{tag}']")
 
-            # --- Namen ---
-            if self.name_anonymizer.is_enabled:
-                for xpath in self.FIELDS_TO_ANONYMIZE['name_fields']:
-                    for elem in find_elements(xpath):
-                        if elem.text:
-                            elem.text = self.name_anonymizer.anonymize(elem.text)
-                            self.fields_anonymized += 1
+            # ── Schritt 1: Partei-weise ───────────────────────────────────
+            for party_tag, account_tag, agent_tag in self.PARTY_GROUPS:
+                for party_elem in by_local_name(party_tag):
+                    parent = party_elem.getparent()
+                    account_elem = None
+                    agent_elem   = None
 
-            # --- IBANs ---
+                    if account_tag and parent is not None:
+                        res = parent.xpath(f"*[local-name()='{account_tag}']")
+                        account_elem = res[0] if res else None
+
+                    if agent_tag and parent is not None:
+                        res = parent.xpath(f"*[local-name()='{agent_tag}']")
+                        agent_elem = res[0] if res else None
+
+                    self._anonymize_party_group(
+                        party_elem, account_elem, agent_elem, processed_ids
+                    )
+
+            # ── Schritt 2: Dokument-weite Restfelder ──────────────────────
+
+            # Verbliebene IBANs (nicht in einer Partei-Gruppe)
             if self.iban_anonymizer.is_enabled:
-                for xpath in self.FIELDS_TO_ANONYMIZE['iban_fields']:
-                    for elem in find_elements(xpath):
-                        if elem.text:
-                            elem.text = self.iban_anonymizer.anonymize(elem.text)
-                            self.fields_anonymized += 1
+                for elem in by_local_name('IBAN'):
+                    if id(elem) not in processed_ids and elem.text:
+                        elem.text = self.iban_anonymizer.anonymize(elem.text)
+                        self.fields_anonymized += 1
 
-            # --- BICs ---
+            # Verbliebene BICs
             if self.bic_anonymizer.is_enabled:
-                for xpath in self.FIELDS_TO_ANONYMIZE['bic_fields']:
-                    for elem in find_elements(xpath):
-                        if elem.text:
+                for bic_tag in ('BIC', 'BICFI'):
+                    for elem in by_local_name(bic_tag):
+                        if id(elem) not in processed_ids and elem.text:
                             elem.text = self.bic_anonymizer.anonymize(elem.text)
                             self.fields_anonymized += 1
 
-            # --- Adressen ---
-            if self.address_anonymizer.is_enabled:
-                simple_address_fields = [
-                    ('.//StrtNm', 'street'),
-                    ('.//PstCd',  'postal'),
-                    ('.//TwnNm',  'city'),
-                    ('.//Ctry',   'country'),
-                ]
-                for xpath, field_type in simple_address_fields:
-                    for elem in find_elements(xpath):
-                        if elem.text:
-                            elem.text = self.address_anonymizer.anonymize(
-                                elem.text,
-                                field_type=field_type,
-                                counter=self.fields_anonymized
-                            )
-                            self.fields_anonymized += 1
-
-                for elem in find_elements('.//AdrLine'):
-                    if elem.text:
-                        elem.text = self.address_anonymizer.anonymize_line(elem.text)
+            # Verbliebene Namen (z.B. CtctDtls/Nm außerhalb Partei-Gruppen)
+            if self.name_anonymizer.is_enabled:
+                for elem in by_local_name('Nm'):
+                    if id(elem) not in processed_ids and elem.text:
+                        elem.text = self.name_anonymizer.anonymize(elem.text)
                         self.fields_anonymized += 1
 
-            # --- Verwendungszweck ---
+            # Verwendungszweck
             if self.remittance_anonymizer.is_enabled:
-                for xpath in self.FIELDS_TO_ANONYMIZE['remittance_fields']:
-                    for elem in find_elements(xpath):
+                for tag in ('Ustrd', 'AddtlRmtInf', 'AddtlTxInf'):
+                    for elem in by_local_name(tag):
                         if elem.text:
                             elem.text = self.remittance_anonymizer.anonymize(elem.text)
                             self.fields_anonymized += 1
 
-            # --- Kontaktdaten ---
+            # Verbliebene Kontaktdaten
             if self.contact_anonymizer.is_enabled:
-                for xpath in self.FIELDS_TO_ANONYMIZE['contact_fields']:
-                    tag_name = xpath.lstrip('./')
-                    contact_type = self._CONTACT_TYPE_MAP.get(tag_name, 'generic')
-                    for elem in find_elements(xpath):
-                        if elem.text:
+                for tag, ct in self._CONTACT_TYPE_MAP.items():
+                    for elem in by_local_name(tag):
+                        if id(elem) not in processed_ids and elem.text:
                             elem.text = self.contact_anonymizer.anonymize(
-                                elem.text,
-                                contact_type=contact_type,
+                                elem.text, contact_type=ct,
                                 counter=self.fields_anonymized
                             )
                             self.fields_anonymized += 1
 
-            # --- Private IDs (immer anonymisieren) ---
-            for xpath in self.FIELDS_TO_ANONYMIZE['private_id_fields']:
-                id_type = next(
-                    (v for k, v in self._PRIVATE_ID_TYPE_MAP.items() if k in xpath),
-                    'generic'
-                )
-                for elem in find_elements(xpath):
-                    if elem.text:
-                        elem.text = self.private_id_anonymizer.anonymize(
-                            elem.text,
-                            id_type=id_type,
-                            counter=self.fields_anonymized
-                        )
-                        self.fields_anonymized += 1
+            # Private IDs (immer anonymisieren)
+            for elem in by_local_name('BirthDt'):
+                if elem.text:
+                    elem.text = self.private_id_anonymizer.anonymize(
+                        elem.text, id_type='birth_date',
+                        counter=self.fields_anonymized
+                    )
+                    self.fields_anonymized += 1
+            for elem in by_local_name('CityOfBirth'):
+                if elem.text:
+                    elem.text = self.private_id_anonymizer.anonymize(
+                        elem.text, id_type='birth_city',
+                        counter=self.fields_anonymized
+                    )
+                    self.fields_anonymized += 1
+            for elem in root.xpath(
+                ".//*[local-name()='PrvtId']"
+                "/*[local-name()='Othr']"
+                "/*[local-name()='Id']"
+            ):
+                if elem.text:
+                    elem.text = self.private_id_anonymizer.anonymize(
+                        elem.text, id_type='generic',
+                        counter=self.fields_anonymized
+                    )
+                    self.fields_anonymized += 1
 
             xml_bytes = etree.tostring(
-                root,
-                encoding='UTF-8',
-                pretty_print=True,
-                xml_declaration=True
+                root, encoding='UTF-8', pretty_print=True, xml_declaration=True
             )
             return xml_bytes.decode('utf-8'), self.fields_anonymized
 

@@ -97,3 +97,43 @@ class AddressFieldAnonymizer(BaseFieldAnonymizer):
             city        = addr.get('city',        self.config.get_default()['address']['city'])
             return f"{postal_code} {city}"
         return original
+
+    def anonymize_with_entity(self, original: str, entity: dict,
+                               field_type: str = 'generic',
+                               counter: int = 0) -> str:
+        """
+        Anonymisiert ein einzelnes Adressfeld mit einer vorgegebenen Entität.
+
+        Parameters
+        ----------
+        field_type : str
+            'street' | 'postal' | 'city' | 'country' | 'generic'
+        """
+        if not original or not original.strip():
+            return original
+        if not self.is_enabled:
+            return original
+
+        addr    = entity.get('address', self.config.get_default()['address'])
+        default = self.config.get_default()['address']
+        mapping = {
+            'street':  addr.get('street',      default['street']),
+            'postal':  addr.get('postal_code',  default['postal_code']),
+            'city':    addr.get('city',         default['city']),
+            'country': addr.get('country',      default['country']),
+        }
+        return mapping.get(field_type, f"Anonymisiert {counter}")
+
+    def anonymize_line_with_entity(self, original: str, entity: dict) -> str:
+        """Erstellt eine kombinierte Adresszeile mit einer vorgegebenen Entität."""
+        if not original or not original.strip():
+            return original
+        if not self.is_enabled:
+            return original
+
+        addr    = entity.get('address', self.config.get_default()['address'])
+        default = self.config.get_default()['address']
+        street  = addr.get('street',      default['street'])
+        postal  = addr.get('postal_code', default['postal_code'])
+        city    = addr.get('city',        default['city'])
+        return f"{street}, {postal} {city}"
