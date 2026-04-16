@@ -8,6 +8,7 @@ Anonymisierer für ISO 20022 XML-Nachrichten
 
 import logging
 import re
+import sys
 from typing import List, Optional, Tuple
 
 from lxml import etree
@@ -259,39 +260,185 @@ class ISO20022Anonymizer(BaseAnonymizer):
     # Validierung
     # -------------------------------------------------------------------------
 
+    # Pflichtfelder pro Nachrichtentyp für die strukturelle Fallback-Validierung.
+    # Jeder Eintrag: (local-name des Root-Childs, [erforderliche Child-Tags])
+    _REQUIRED_ELEMENTS = {
+        'camt.054': ('BkToCstmrDbtCdtNtfctn', ['GrpHdr', 'Ntfctn']),
+        'camt.057': ('NtfctnToRcv',            ['GrpHdr', 'Ntfctn']),
+        'pacs.002': ('FIToFIPmtStsRpt',         ['GrpHdr', 'TxInfAndSts']),
+        'pacs.008': ('FIToFICstmrCdtTrf',       ['GrpHdr', 'CdtTrfTxInf']),
+        'pacs.009': ('FinInstnCdtTrf',           ['GrpHdr', 'CdtTrfTxInf']),
+        'pacs.010': ('FinInstnDrctDbt',          ['GrpHdr', 'DrctDbtTxInf']),
+    }
+
     def validate(self, content: str) -> Tuple[bool, List[str]]:
-        """Validiert eine ISO 20022 Nachricht."""
+        """
+        Validiert eine ISO 20022 Nachricht.
+
+        Strategie
+        ---------
+        Python >= 3.10  Schema-Validierung via pyiso20022 / xsdata
+        Python <  3.10  Strukturelle Fallback-Validierung via lxml
+                        (pyiso20022/xsdata nutzen ``kw_only`` in @dataclass,
+                        das erst ab Python 3.10 verfügbar ist)
+        """
         errors = []
 
         try:
-            root = etree.fromstring(content.encode('utf-8'))
+            root      = etree.fromstring(content.encode('utf-8'))
             namespace = self._detect_namespace(root)
-            msg_type = self._detect_message_type(namespace)
+            msg_type  = self._detect_message_type(namespace)
 
-            try:
-                from xsdata.formats.dataclass.parsers import XmlParser
-                from xsdata.formats.dataclass.parsers.config import ParserConfig
-
-                parser = XmlParser(config=ParserConfig(fail_on_unknown_properties=False))
-                document_class = self._get_document_class(msg_type)
-
-                if document_class:
-                    parser.from_string(content, document_class)
-                    logger.info(f"Validierung erfolgreich für {msg_type}")
-                else:
-                    errors.append(f"Kein Schema für Nachrichtentyp: {msg_type}")
-
-            except ImportError as e:
-                logger.warning(f"pyiso20022 nicht verfügbar: {e}")
-                errors.append("pyiso20022 nicht installiert - nur XML-Syntax geprüft")
-            except Exception as e:
-                errors.append(f"Schema-Validierungsfehler: {str(e)}")
+            if self._pyiso20022_supported():
+                errors.extend(self._validate_with_pyiso20022(content, msg_type))
+            else:
+                logger.warning(
+                    "pyiso20022/xsdata erfordert Python 3.10+ "
+                    "(aktuell: %d.%d) – strukturelle Fallback-Validierung wird verwendet.",
+                    *sys.version_info[:2]
+                )
+                errors.extend(self._validate_structural(root, namespace, msg_type))
 
             return len(errors) == 0, errors
 
         except etree.XMLSyntaxError as e:
             errors.append(f"XML-Syntaxfehler: {str(e)}")
             return False, errors
+
+    # ── Hilfsmethoden Validierung ─────────────────────────────────────────────
+
+    @staticmethod
+    def _pyiso20022_supported() -> bool:
+        """True wenn die laufende Python-Version pyiso20022/xsdata unterstützt."""
+        import sys as _sys
+        return _sys.version_info >= (3, 10)
+
+    def _validate_with_pyiso20022(self, content: str,
+                                   msg_type: str) -> List[str]:
+        """
+        Schema-Validierung via pyiso20022 / xsdata (Python >= 3.10).
+
+        Fängt ``TypeError`` mit dem Text 'kw_only' als Sicherheitsnetz ab,
+        falls doch eine inkompatible Python-Version durchgerutscht ist.
+        """
+        errors = []
+        try:
+            from xsdata.formats.dataclass.parsers import XmlParser
+            from xsdata.formats.dataclass.parsers.config import ParserConfig
+
+            parser         = XmlParser(config=ParserConfig(fail_on_unknown_properties=False))
+            document_class = self._get_document_class(msg_type)
+
+            if document_class:
+                parser.from_string(content, document_class)
+                logger.info("Schema-Validierung erfolgreich für %s", msg_type)
+            else:
+                errors.append(
+                    f"Kein pyiso20022-Schema für Nachrichtentyp '{msg_type}' verfügbar."
+                )
+
+        except ImportError as e:
+            logger.warning("pyiso20022 nicht installiert: %s", e)
+            errors.append(
+                "pyiso20022/xsdata nicht installiert – "
+                "nur XML-Syntax wurde geprüft. "
+                "Installation: pip install pyiso20022 xsdata"
+            )
+        except TypeError as e:
+            # Sicherheitsnetz: kw_only-Fehler auf unerwarteter Python-Version
+            if 'kw_only' in str(e):
+                errors.append(
+                    f"pyiso20022 erfordert Python 3.10+ "
+                    f"(aktuell: {sys.version_info.major}.{sys.version_info.minor}). "
+                    f"Bitte Python aktualisieren oder validate_after: false setzen."
+                )
+            else:
+                errors.append(f"Schema-Validierungsfehler (TypeError): {e}")
+        except Exception as e:
+            errors.append(f"Schema-Validierungsfehler: {e}")
+
+        return errors
+
+    def _validate_structural(self, root: etree._Element,
+                              namespace: Optional[str],
+                              msg_type: str) -> List[str]:
+        """
+        Strukturelle Fallback-Validierung ohne externe Bibliotheken (Python 3.8+).
+
+        Prüft:
+        1. ISO 20022-Namespace vorhanden und erkannt
+        2. Nachrichtentyp bekannt
+        3. Pflicht-Child-Elemente des Document-Knotens vorhanden
+        4. GrpHdr enthält MsgId und CreDtTm
+        5. Mindestens eine IBAN oder BICFI vorhanden (Plausibilität)
+        """
+        errors: List[str] = []
+
+        # 1. Namespace
+        if not namespace:
+            errors.append(
+                "Kein ISO 20022-Namespace gefunden. "
+                "Erwartet: urn:iso:std:iso:20022:tech:xsd:..."
+            )
+            return errors
+
+        # 2. Bekannter Nachrichtentyp
+        base_type = next(
+            (k for k in self._REQUIRED_ELEMENTS if msg_type.startswith(k)),
+            None
+        )
+        if not base_type:
+            errors.append(
+                f"Unbekannter Nachrichtentyp '{msg_type}'. "
+                f"Unterstützt: {', '.join(self._REQUIRED_ELEMENTS)}"
+            )
+            return errors
+
+        root_child_name, required_tags = self._REQUIRED_ELEMENTS[base_type]
+
+        # 3. Pflicht-Child-Elemente
+        def find_local(tag: str) -> List[etree._Element]:
+            return root.xpath(f".//*[local-name()='{tag}']")
+
+        missing_root = find_local(root_child_name)
+        if not missing_root:
+            errors.append(
+                f"Fehlendes Root-Element <{root_child_name}> "
+                f"für Nachrichtentyp {msg_type}."
+            )
+
+        for tag in required_tags:
+            if not find_local(tag):
+                errors.append(f"Fehlendes Pflicht-Element <{tag}>.")
+
+        # 4. GrpHdr: MsgId und CreDtTm
+        grp_hdr_elems = find_local('GrpHdr')
+        if grp_hdr_elems:
+            grp_hdr = grp_hdr_elems[0]
+            for required in ('MsgId', 'CreDtTm'):
+                if not grp_hdr.xpath(f".//*[local-name()='{required}']"):
+                    errors.append(f"<GrpHdr> fehlt Pflichtfeld <{required}>.")
+        else:
+            # Bereits in Schritt 3 gemeldet – hier nicht doppelt
+            pass
+
+        # 5. Mindestens eine IBAN oder BICFI (Plausibilität)
+        has_iban  = bool(find_local('IBAN'))
+        has_bicfi = bool(find_local('BICFI') or find_local('BIC'))
+        if not has_iban and not has_bicfi:
+            errors.append(
+                "Weder <IBAN> noch <BICFI>/<BIC> gefunden – "
+                "Nachricht scheint unvollständig."
+            )
+
+        if not errors:
+            logger.info(
+                "Strukturelle Validierung erfolgreich für %s "
+                "(Fallback, kein pyiso20022-Schema).",
+                msg_type
+            )
+
+        return errors
 
     def _get_document_class(self, msg_type: str):
         """Gibt die passende Document-Klasse für den Nachrichtentyp zurück."""

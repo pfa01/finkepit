@@ -2,10 +2,20 @@
 # ============================================
 # Installation: pip install -r requirements.txt
 
-# XML-Verarbeitung (Pflicht)
+# XML-Verarbeitung (Pflicht, kompatibel ab Python 3.8)
 lxml>=4.9.0
 
 # ISO 20022 Schema-Validierung (optional)
-# Wird nur benötigt wenn validate_after: true in config.json gesetzt ist.
+# ─────────────────────────────────────────────────────────────────────────────
+# WICHTIG: pyiso20022 und xsdata setzen Python 3.10+ voraus.
+# Hintergrund: xsdata generiert Datenklassen mit dem Parameter kw_only=True
+# (@dataclass), der erst in Python 3.10 eingeführt wurde. Auf Python 3.8/3.9
+# führt der Import zu: TypeError: dataclass() got an unexpected keyword
+# argument 'kw_only'
+#
+# Auf Python < 3.10 verwendet das Tool automatisch eine strukturelle
+# Fallback-Validierung (lxml-basiert, kein externes Schema erforderlich).
+#
+# Nur einkommentieren wenn Python >= 3.10 vorhanden:
 # pyiso20022>=0.1.0
 # xsdata>=23.8
