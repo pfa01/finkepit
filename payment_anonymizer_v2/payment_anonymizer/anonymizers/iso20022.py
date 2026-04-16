@@ -1,0 +1,319 @@
+# -*- coding: utf-8 -*-
+"""
+anonymizers/iso20022.py
+=======================
+Anonymisierer für ISO 20022 XML-Nachrichten
+(camt.054/057, pacs.002/008/009/010).
+"""
+
+import logging
+import re
+from typing import List, Optional, Tuple
+
+from lxml import etree
+
+from ..config import Config
+from .base import BaseAnonymizer
+
+logger = logging.getLogger(__name__)
+
+
+class ISO20022Anonymizer(BaseAnonymizer):
+    """Anonymisierer für ISO 20022 XML-Nachrichten."""
+
+    NAMESPACES = {
+        'camt054': 'urn:iso:std:iso:20022:tech:xsd:camt.054.001.08',
+        'camt057': 'urn:iso:std:iso:20022:tech:xsd:camt.057.001.06',
+        'pacs002': 'urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10',
+        'pacs008': 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08',
+        'pacs009': 'urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08',
+        'pacs010': 'urn:iso:std:iso:20022:tech:xsd:pacs.010.001.03',
+    }
+
+    FIELDS_TO_ANONYMIZE = {
+        'name_fields': [
+            './/Nm',
+            './/CtctDtls/Nm',
+        ],
+        'address_fields': [
+            './/StrtNm',
+            './/BldgNb',
+            './/PstCd',
+            './/TwnNm',
+            './/AdrLine',
+            './/Ctry',
+        ],
+        'iban_fields': [
+            './/IBAN',
+        ],
+        'bic_fields': [
+            './/BIC',
+            './/BICFI',
+        ],
+        'remittance_fields': [
+            './/Ustrd',
+            './/AddtlRmtInf',
+            './/AddtlTxInf',
+        ],
+        'contact_fields': [
+            './/EmailAdr',
+            './/PhneNb',
+            './/MobNb',
+            './/FaxNb',
+        ],
+        'private_id_fields': [
+            './/PrvtId/Othr/Id',
+            './/PrvtId/DtAndPlcOfBirth/BirthDt',
+            './/PrvtId/DtAndPlcOfBirth/CityOfBirth',
+        ],
+    }
+
+    # XPath-Teilstring → id_type für PrivateIDFieldAnonymizer
+    _PRIVATE_ID_TYPE_MAP = {
+        'BirthDt':     'birth_date',
+        'CityOfBirth': 'birth_city',
+    }
+
+    # XML-Tag → contact_type für ContactFieldAnonymizer
+    _CONTACT_TYPE_MAP = {
+        'EmailAdr': 'email',
+        'PhneNb':   'phone',
+        'MobNb':    'phone',
+        'FaxNb':    'phone',
+    }
+
+    def __init__(self, config: Config):
+        super().__init__(config)
+
+    # -------------------------------------------------------------------------
+    # Namespace- / Nachrichtentyp-Erkennung
+    # -------------------------------------------------------------------------
+
+    def _detect_namespace(self, root: etree._Element) -> Optional[str]:
+        """Erkennt den Namespace der XML-Nachricht."""
+        nsmap = root.nsmap
+
+        if None in nsmap:
+            ns = nsmap[None]
+            if 'iso:std:iso:20022' in ns:
+                return ns
+
+        root_local = etree.QName(root.tag).localname
+        if root_local == 'DataPDU':
+            for elem in root.iter():
+                local_name = etree.QName(elem.tag).localname
+                if local_name == 'Document':
+                    doc_ns = elem.nsmap.get(None)
+                    if doc_ns and 'iso:std:iso:20022' in doc_ns:
+                        return doc_ns
+            for elem in root.iter():
+                local_name = etree.QName(elem.tag).localname
+                if local_name == 'AppHdr':
+                    hdr_ns = elem.nsmap.get(None)
+                    if hdr_ns and 'iso:std:iso:20022' in hdr_ns:
+                        return hdr_ns
+
+        for ns in nsmap.values():
+            if 'iso:std:iso:20022' in ns:
+                return ns
+
+        return None
+
+    def _detect_message_type(self, namespace: str) -> str:
+        """Erkennt den Nachrichtentyp aus dem Namespace."""
+        if not namespace:
+            return "UNKNOWN"
+        match = re.search(r'xsd:([a-z]+\.\d+)', namespace)
+        if match:
+            return match.group(1)
+        return "UNKNOWN"
+
+    # -------------------------------------------------------------------------
+    # Anonymisierung
+    # -------------------------------------------------------------------------
+
+    def anonymize(self, content: str) -> Tuple[str, int]:
+        """Anonymisiert eine ISO 20022 XML-Nachricht."""
+        self.fields_anonymized = 0
+
+        try:
+            root = etree.fromstring(content.encode('utf-8'))
+            namespace = self._detect_namespace(root)
+            ns_map = {'ns': namespace} if namespace else {}
+
+            def find_elements(xpath_expr: str):
+                """Findet Elemente mit oder ohne Namespace."""
+                if namespace:
+                    if xpath_expr.startswith('.//'):
+                        elem_path = xpath_expr[3:]
+                        if '/' in elem_path:
+                            parts = elem_path.split('/')
+                            local_xpath = './/' + '/'.join(
+                                [f"*[local-name()='{p}']" for p in parts]
+                            )
+                        else:
+                            local_xpath = f".//*[local-name()='{elem_path}']"
+                        return root.xpath(local_xpath)
+                    else:
+                        ns_xpath = xpath_expr.replace('.//', './/ns:')
+                        return root.xpath(ns_xpath, namespaces=ns_map)
+                return root.xpath(xpath_expr)
+
+            # --- Namen ---
+            if self.name_anonymizer.is_enabled:
+                for xpath in self.FIELDS_TO_ANONYMIZE['name_fields']:
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.name_anonymizer.anonymize(elem.text)
+                            self.fields_anonymized += 1
+
+            # --- IBANs ---
+            if self.iban_anonymizer.is_enabled:
+                for xpath in self.FIELDS_TO_ANONYMIZE['iban_fields']:
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.iban_anonymizer.anonymize(elem.text)
+                            self.fields_anonymized += 1
+
+            # --- BICs ---
+            if self.bic_anonymizer.is_enabled:
+                for xpath in self.FIELDS_TO_ANONYMIZE['bic_fields']:
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.bic_anonymizer.anonymize(elem.text)
+                            self.fields_anonymized += 1
+
+            # --- Adressen ---
+            if self.address_anonymizer.is_enabled:
+                simple_address_fields = [
+                    ('.//StrtNm', 'street'),
+                    ('.//PstCd',  'postal'),
+                    ('.//TwnNm',  'city'),
+                    ('.//Ctry',   'country'),
+                ]
+                for xpath, field_type in simple_address_fields:
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.address_anonymizer.anonymize(
+                                elem.text,
+                                field_type=field_type,
+                                counter=self.fields_anonymized
+                            )
+                            self.fields_anonymized += 1
+
+                for elem in find_elements('.//AdrLine'):
+                    if elem.text:
+                        elem.text = self.address_anonymizer.anonymize_line(elem.text)
+                        self.fields_anonymized += 1
+
+            # --- Verwendungszweck ---
+            if self.remittance_anonymizer.is_enabled:
+                for xpath in self.FIELDS_TO_ANONYMIZE['remittance_fields']:
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.remittance_anonymizer.anonymize(elem.text)
+                            self.fields_anonymized += 1
+
+            # --- Kontaktdaten ---
+            if self.contact_anonymizer.is_enabled:
+                for xpath in self.FIELDS_TO_ANONYMIZE['contact_fields']:
+                    tag_name = xpath.lstrip('./')
+                    contact_type = self._CONTACT_TYPE_MAP.get(tag_name, 'generic')
+                    for elem in find_elements(xpath):
+                        if elem.text:
+                            elem.text = self.contact_anonymizer.anonymize(
+                                elem.text,
+                                contact_type=contact_type,
+                                counter=self.fields_anonymized
+                            )
+                            self.fields_anonymized += 1
+
+            # --- Private IDs (immer anonymisieren) ---
+            for xpath in self.FIELDS_TO_ANONYMIZE['private_id_fields']:
+                id_type = next(
+                    (v for k, v in self._PRIVATE_ID_TYPE_MAP.items() if k in xpath),
+                    'generic'
+                )
+                for elem in find_elements(xpath):
+                    if elem.text:
+                        elem.text = self.private_id_anonymizer.anonymize(
+                            elem.text,
+                            id_type=id_type,
+                            counter=self.fields_anonymized
+                        )
+                        self.fields_anonymized += 1
+
+            xml_bytes = etree.tostring(
+                root,
+                encoding='UTF-8',
+                pretty_print=True,
+                xml_declaration=True
+            )
+            return xml_bytes.decode('utf-8'), self.fields_anonymized
+
+        except etree.XMLSyntaxError as e:
+            logger.error(f"XML Parse-Fehler: {e}")
+            raise
+
+    # -------------------------------------------------------------------------
+    # Validierung
+    # -------------------------------------------------------------------------
+
+    def validate(self, content: str) -> Tuple[bool, List[str]]:
+        """Validiert eine ISO 20022 Nachricht."""
+        errors = []
+
+        try:
+            root = etree.fromstring(content.encode('utf-8'))
+            namespace = self._detect_namespace(root)
+            msg_type = self._detect_message_type(namespace)
+
+            try:
+                from xsdata.formats.dataclass.parsers import XmlParser
+                from xsdata.formats.dataclass.parsers.config import ParserConfig
+
+                parser = XmlParser(config=ParserConfig(fail_on_unknown_properties=False))
+                document_class = self._get_document_class(msg_type)
+
+                if document_class:
+                    parser.from_string(content, document_class)
+                    logger.info(f"Validierung erfolgreich für {msg_type}")
+                else:
+                    errors.append(f"Kein Schema für Nachrichtentyp: {msg_type}")
+
+            except ImportError as e:
+                logger.warning(f"pyiso20022 nicht verfügbar: {e}")
+                errors.append("pyiso20022 nicht installiert - nur XML-Syntax geprüft")
+            except Exception as e:
+                errors.append(f"Schema-Validierungsfehler: {str(e)}")
+
+            return len(errors) == 0, errors
+
+        except etree.XMLSyntaxError as e:
+            errors.append(f"XML-Syntaxfehler: {str(e)}")
+            return False, errors
+
+    def _get_document_class(self, msg_type: str):
+        """Gibt die passende Document-Klasse für den Nachrichtentyp zurück."""
+        try:
+            if msg_type.startswith('camt.054'):
+                from pyiso20022.camt.camt_054_001_08 import Document
+                return Document
+            elif msg_type.startswith('camt.057'):
+                from pyiso20022.camt.camt_057_001_06 import Document
+                return Document
+            elif msg_type.startswith('pacs.002'):
+                from pyiso20022.pacs.pacs_002_001_10 import Document
+                return Document
+            elif msg_type.startswith('pacs.008'):
+                from pyiso20022.pacs.pacs_008_001_08 import Document
+                return Document
+            elif msg_type.startswith('pacs.009'):
+                from pyiso20022.pacs.pacs_009_001_08 import Document
+                return Document
+            elif msg_type.startswith('pacs.010'):
+                from pyiso20022.pacs.pacs_010_001_03 import Document
+                return Document
+        except ImportError:
+            pass
+        return None

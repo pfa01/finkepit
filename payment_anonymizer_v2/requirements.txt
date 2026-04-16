@@ -1,0 +1,11 @@
+# Payment Message Anonymizer – Abhängigkeiten
+# ============================================
+# Installation: pip install -r requirements.txt
+
+# XML-Verarbeitung (Pflicht)
+lxml>=4.9.0
+
+# ISO 20022 Schema-Validierung (optional)
+# Wird nur benötigt wenn validate_after: true in config.json gesetzt ist.
+# pyiso20022>=0.1.0
+# xsdata>=23.8
