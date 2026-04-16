@@ -10,6 +10,14 @@ from typing import List
 
 
 @dataclass
+class FieldMapping:
+    """Mapping von Original- zu anonymisierten Werten."""
+    original: str
+    anonymized: str
+    field_type: str                 # NAME, IBAN, BIC, ADDRESS, REMITTANCE, CONTACT
+
+
+@dataclass
 class AnonymizationResult:
     """Ergebnis einer Anonymisierung."""
     input_file: str
@@ -21,11 +29,5 @@ class AnonymizationResult:
     validation_errors: List[str] = field(default_factory=list)
     error_message: str = ""
     processing_time_ms: float = 0.0
-
-
-@dataclass
-class FieldMapping:
-    """Mapping von Original- zu anonymisierten Werten."""
-    original: str
-    anonymized: str
-    field_type: str                 # NAME, IBAN, BIC, ADDRESS, REMITTANCE, CONTACT
+    # Alle Ersetzungen dieser Datei (befüllt nach erfolgreicher Anonymisierung)
+    mappings: List[FieldMapping] = field(default_factory=list)

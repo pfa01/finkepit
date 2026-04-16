@@ -2,7 +2,14 @@
 """
 result_logger.py
 ================
-Schreibt Anonymisierungsergebnisse als CSV- oder JSON-Log.
+Schreibt Anonymisierungsergebnisse in zwei Log-Dateien:
+
+Zusammenfassung  (anonymization_log_TIMESTAMP.csv / .json)
+    Eine Zeile pro verarbeiteter Datei mit Status, Feldanzahl, Dauer usw.
+
+Detail-Log       (anonymization_detail_log_TIMESTAMP.csv)
+    Eine Zeile pro Ersetzung mit Feldtyp, alt wert und neuer wert.
+    Wird nur geschrieben wenn mindestens eine Ersetzung vorliegt.
 """
 
 import csv
@@ -18,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class ResultLogger:
-    """Logger für Anonymisierungsergebnisse."""
+    """Logger für Anonymisierungsergebnisse (Zusammenfassung + Detail)."""
 
     def __init__(self, log_path: str, log_format: str = 'csv'):
         self.log_path = Path(log_path)
@@ -31,15 +38,25 @@ class ResultLogger:
         self.results.append(result)
 
     def write_log(self):
-        """Schreibt alle gesammelten Ergebnisse in die Log-Datei."""
+        """
+        Schreibt Zusammenfassungs- und Detail-Log.
+
+        Beide Dateien erhalten denselben Zeitstempel im Dateinamen,
+        sodass sie eindeutig einander zugeordnet werden können.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if self.log_format == 'csv':
-            self._write_csv(timestamp)
+            self._write_summary_csv(timestamp)
         else:
-            self._write_json(timestamp)
+            self._write_summary_json(timestamp)
+        self._write_detail_csv(timestamp)
 
-    def _write_csv(self, timestamp: str):
-        """Schreibt ein CSV-Log."""
+    # -------------------------------------------------------------------------
+    # Zusammenfassungs-Log
+    # -------------------------------------------------------------------------
+
+    def _write_summary_csv(self, timestamp: str):
+        """Schreibt eine Zeile pro Datei in die Zusammenfassungs-CSV."""
         log_file = self.log_path / f"anonymization_log_{timestamp}.csv"
         with open(log_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f, delimiter=';')
@@ -60,16 +77,16 @@ class ResultLogger:
                     r.error_message,
                     f"{r.processing_time_ms:.2f}"
                 ])
-        logger.info(f"Log geschrieben: {log_file}")
+        logger.info(f"Zusammenfassungs-Log geschrieben: {log_file}")
 
-    def _write_json(self, timestamp: str):
-        """Schreibt ein JSON-Log."""
+    def _write_summary_json(self, timestamp: str):
+        """Schreibt ein JSON-Zusammenfassungs-Log."""
         log_file = self.log_path / f"anonymization_log_{timestamp}.json"
         data = {
             'timestamp': timestamp,
             'total_files': len(self.results),
             'successful': sum(1 for r in self.results if r.status == 'SUCCESS'),
-            'failed': sum(1 for r in self.results if r.status == 'ERROR'),
+            'failed':     sum(1 for r in self.results if r.status == 'ERROR'),
             'results': [
                 {
                     'input_file':         r.input_file,
@@ -80,11 +97,50 @@ class ResultLogger:
                     'validation_status':  r.validation_status,
                     'validation_errors':  r.validation_errors,
                     'error_message':      r.error_message,
-                    'processing_time_ms': r.processing_time_ms
+                    'processing_time_ms': r.processing_time_ms,
                 }
                 for r in self.results
             ]
         }
         with open(log_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Log geschrieben: {log_file}")
+        logger.info(f"Zusammenfassungs-Log geschrieben: {log_file}")
+
+    # -------------------------------------------------------------------------
+    # Detail-Log  (eine Zeile pro Ersetzung)
+    # -------------------------------------------------------------------------
+
+    def _write_detail_csv(self, timestamp: str):
+        """
+        Schreibt eine Zeile pro Ersetzung in die Detail-CSV.
+
+        Spalten:
+            Input File  – Quelldatei der Nachricht
+            Field Type  – Typ des ersetzten Feldes (NAME, IBAN, BIC, …)
+            Alt Wert    – Originalwert vor der Anonymisierung
+            Neuer Wert  – Ersatzwert nach der Anonymisierung
+
+        Dateien ohne Ersetzungen (Status SKIPPED / ERROR ohne Mappings)
+        erzeugen keinen Eintrag.
+        """
+        # Nur schreiben wenn überhaupt Ersetzungen vorhanden sind
+        total_mappings = sum(len(r.mappings) for r in self.results)
+        if total_mappings == 0:
+            logger.debug("Keine Ersetzungen vorhanden – Detail-Log wird nicht geschrieben.")
+            return
+
+        log_file = self.log_path / f"anonymization_detail_log_{timestamp}.csv"
+        with open(log_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f, delimiter=';')
+            writer.writerow(['Input File', 'Field Type', 'Alt Wert', 'Neuer Wert'])
+            for r in self.results:
+                for mapping in r.mappings:
+                    writer.writerow([
+                        r.input_file,
+                        mapping.field_type,
+                        mapping.original,
+                        mapping.anonymized,
+                    ])
+        logger.info(
+            f"Detail-Log geschrieben: {log_file}  ({total_mappings} Ersetzungen)"
+        )

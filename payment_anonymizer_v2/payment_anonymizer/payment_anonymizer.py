@@ -101,6 +101,8 @@ class PaymentAnonymizer:
             anonymizer.reset()
             anonymized_content, fields_count = anonymizer.anonymize(content)
             result.fields_anonymized = fields_count
+            # Alle Ersetzungen für Detail-Log und Debug-Auswertung übernehmen
+            result.mappings = list(anonymizer.mappings.values())
 
             validate_after = self.config.data.get('message_types', {}).get(
                 'iso20022' if file_type == 'ISO20022' else 'swift_mt', {}

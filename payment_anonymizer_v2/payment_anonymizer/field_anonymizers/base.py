@@ -5,11 +5,14 @@ field_anonymizers/base.py
 Abstrakte Basisklasse für alle Feld-Anonymisierer.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Dict
 
 from ..models import FieldMapping
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class BaseFieldAnonymizer(ABC):
@@ -20,12 +23,14 @@ class BaseFieldAnonymizer(ABC):
     Nachrichten-Anonymisierer) stellt sicher, dass gleiche Ursprungswerte
     im gesamten Dokument konsistent auf denselben Dummy-Wert gemappt werden.
 
-    Auswahllogik
-    ------------
-    Neue Mappings werden durch ``_get_or_create_mapping`` angelegt.
-    Der Generator-Callback wird genau einmal pro Original-Wert aufgerufen
-    und greift auf die Round-Robin-Methoden der Config zu.
-    Damit ist die Ersetzung deterministisch und reproduzierbar.
+    Debug-Logging
+    -------------
+    Bei jeder **neuen** Zuordnung wird auf Level DEBUG protokolliert::
+
+        [FELDTYP] alt wert=<original>  neuer wert=<anonymized>
+
+    Wiederholte Treffer desselben Originalwerts erzeugen keinen weiteren
+    Log-Eintrag, da kein neues Mapping angelegt wird.
     """
 
     def __init__(self, config: Config, mappings: Dict[str, FieldMapping]):
@@ -37,13 +42,17 @@ class BaseFieldAnonymizer(ABC):
         """
         Holt ein bestehendes Mapping oder legt ein neues an.
 
-        Der ``generator_func`` wird nur aufgerufen, wenn noch kein Mapping
-        für ``original`` existiert → garantiert dokumentweite Konsistenz.
+        Jede neue Zuordnung wird auf DEBUG-Level protokolliert.
+        Wiederholungen desselben Originals erzeugen keinen neuen Log-Eintrag.
         """
         key = f"{field_type}:{original}"
         if key not in self.mappings:
             anonymized = generator_func(original)
             self.mappings[key] = FieldMapping(original, anonymized, field_type)
+            logger.debug(
+                "[%s] alt wert=%s  neuer wert=%s",
+                field_type, original, anonymized
+            )
         return self.mappings[key].anonymized
 
     @property
