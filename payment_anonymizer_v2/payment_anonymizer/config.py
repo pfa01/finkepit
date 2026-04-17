@@ -99,6 +99,64 @@ class Config:
     def anonymize_contact(self) -> bool:
         return self.data.get('anonymization', {}).get('anonymize_contact', True)
 
+    @property
+    def grphdr_bic_enabled(self) -> bool:
+        return self.data.get('header_modification', {}).get('modify_grphdr_bic',False)
+
+    @property
+    def grphdr_bic_replacements(self) -> list:
+        """
+        Gibt die BIC-Ersetzungen für den GrpHdr zurück. 
+        Der from-Wert wird als 8-Zeichen-Präfix geprüft,
+        damit werden BIC8 und BIC11 erfasst.
+        """
+        return self.data.get('header_modification',{}) \
+                        .get('grphdr_bic', {}) \
+                        .get('bic_replacements',[])
+
+    @property
+    def swift_mx_service_enabled(self) -> bool:
+        return self.data.get('header_modification', {}) \
+                        .get('modify_swift_mx_service',False)
+
+    @property
+    def swift_mx_service_prod(self) -> str:
+        return self.data.get('header_modification', {}) \
+                        .get('service_replacement',{}) \
+                        .get('swift_mx', {}) \
+                        .get('prod_value','')
+
+    @property
+    def swift_mx_service_test(self) -> str:
+        return self.data.get('header_modification', {}) \
+                        .get('service_replacement',{}) \
+                        .get('swift_mx', {}) \
+                        .get('test_value','')
+
+
+    @property
+    def sepa_service_enabled(self) -> bool:
+        return self.data.get('header_modification', {}) \
+                        .get('modify_sepa_service',False)
+
+
+    @property
+    def sepa_service_prod(self) -> str:
+        return self.data.get('header_modification', {}) \
+                        .get('service_replacement',{}) \
+                        .get('swift', {}) \
+                        .get('prod_value','')
+
+
+    @property
+    def sepa_service_test(self) -> str:
+        return self.data.get('header_modification', {}) \
+                        .get('service_replacement',{}) \
+                        .get('swift', {}) \
+                        .get('test_value','')
+
+
+    
     # -------------------------------------------------------------------------
     # Default-Entität
     # -------------------------------------------------------------------------
@@ -212,10 +270,10 @@ class Config:
 
     def reset_indices(self):
         """Setzt alle Indizes und Zuordnungen zurück (für neue Datei)."""
-        self._person_index = 0
-        self._company_index = 0
-        self._entity_index = 0
-        self._remittance_index = 0
+        #self._person_index = 0
+        #self._company_index = 0
+        #self._entity_index = 0
+        #self._remittance_index = 0
         self._entity_assignments = {}     # Partei-Zuordnungen ebenfalls löschen
 
     # -------------------------------------------------------------------------
