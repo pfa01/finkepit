@@ -176,15 +176,6 @@ class PaymentAnonymizer:
         skipped      = sum(1 for r in results if r.status == 'SKIPPED')
         total_fields = sum(r.fields_anonymized for r in results)
 
-        print("\n" + "=" * 60)
-        print("ANONYMISIERUNG ABGESCHLOSSEN")
-        print("=" * 60)
-        print(f"Gesamt Dateien:       {total}")
-        print(f"Erfolgreich:          {successful}")
-        print(f"Fehlgeschlagen:       {failed}")
-        print(f"Übersprungen:         {skipped}")
-        print(f"Felder anonymisiert:  {total_fields}")
-        print("=" * 60)
         print("\nAktive Anonymisierungseinstellungen:")
         print(f"  - IBAN:              {'Ja' if self.config.anonymize_iban else 'Nein'}")
         print(f"  - BIC:               {'Ja' if self.config.anonymize_bic else 'Nein'}")
@@ -192,4 +183,20 @@ class PaymentAnonymizer:
         print(f"  - Verwendungszweck:  {'Ja' if self.config.anonymize_remittance else 'Nein'}")
         print(f"  - Kontaktdaten:      {'Ja' if self.config.anonymize_contact else 'Nein'}")
         print(f"  - Namen:             {'Ja' if self.config.anonymize_name else 'Nein'}")
+        print("\nAktive Header-Modifikationen:")
+        print(f"  - GrpHdr BIC:        {'Ja' if self.config.grphdr_bic_enabled else 'Nein'}", end="")
+        if self.config.grphdr_bic_enabled:
+            replacements = self.config.grphdr_bic_replacements
+            if replacements:
+                pairs = ', '.join(f"{r['from']} → {r['to']}" for r in replacements)
+                print(f"  ({pairs})", end="")
+        print()
+        print(f"  - SWIFT MX Service:  {'Ja' if self.config.swift_mx_service_enabled else 'Nein'}", end="")
+        if self.config.swift_mx_service_enabled:
+            print(f"  ({self.config.swift_mx_service_prod} → {self.config.swift_mx_service_test})", end="")
+        print()
+        print(f"  - SEPA Service:      {'Ja' if self.config.sepa_service_enabled else 'Nein'}", end="")
+        if self.config.sepa_service_enabled:
+            print(f"  ({self.config.sepa_service_prod} → {self.config.sepa_service_test})", end="")
+        print()
         print("=" * 60 + "\n")
