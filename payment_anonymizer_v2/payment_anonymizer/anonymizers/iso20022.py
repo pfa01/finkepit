@@ -177,9 +177,29 @@ class ISO20022Anonymizer(BaseAnonymizer):
         if name_elems and name_elems[0].text and name_elems[0].text.strip():
             original_name = name_elems[0].text.strip()
 
-        is_company = bool(fin_names) or (
-            original_name is not None and self.name_anonymizer._is_company(original_name)
-        )
+        # Priorität für Namenserkennung
+        # 1. PrvtId im XML     -> Privatperson
+        # 2. OrgId im XML      -> Firma
+        # 3. FinInstnId        -> Firma
+        # 4. Keyword im Namen  -> Firma (Fallback)
+        # 5. Sonst             -> Privatperson (Fallback)
+
+        has_prvt_id = bool(party_elem.xpath(".//*[local-name()='PrvtId]"))
+        has_org_id = bool(party_elem.xpath(".//*[local-name()='PrvtId]"))
+
+        if has_prvt_id:
+            is_company = False
+        elif has_org_id or bool(fin_names):
+            is_company = True
+        else:
+            is_company = (
+                original_name is not None 
+                and self.name_anonymizer._is_company(original_name)
+            )
+
+        #is_company = bool(fin_names) or (
+        #    original_name is not None and self.name_anonymizer._is_company(original_name)
+        #)
 
         if original_name:
             entity = self.config.get_or_assign_entity(original_name, is_company)
@@ -247,6 +267,106 @@ class ISO20022Anonymizer(BaseAnonymizer):
                         processed_ids.add(id(elem))
                         self.fields_anonymized += 1
 
+
+    def _replace_grphdr_bic(self, root:etree._Element, processed_ids:set) -> int:
+        """
+        Ersetzt BICs im GrpHdr anhand der bic_replacements-Liste. 
+
+        Der 'from'-Wert wird als 8-Zeichen-Präfix geprüft, damit BIC8 und BIC11 gleichermaßen 
+        erfasst werden. Der Branch-Code (POs. 9-11) bleibt bei BIC11 erhalten. 
+        Felder, die bereits in Schritt 1 verarbeitet wurden, werden übersprungen (processed_ids-Prüfung).
+        """
+        if not self.config.grphdr_bic_enabled: 
+            return 0
+        
+        replacements = self.config.grphdr_bic_replacements
+        if not replacements:
+            logger.warning(
+                "grphdr_bic aktivert aber keine bic_replacements konifguriert."
+                )
+            return 0
+
+        def apply_specific_replacements(bic_value: str) -> Optional[str]:
+            bic_upper = bic_value.strip().upper()
+            for mapping in replacements:
+                from_bic = mapping.get('from','').upper()
+                to_bic = mapping.get('to','').upper()
+                if not from_bic or to_bic:
+                    continue
+
+                if bic_upper[:8] == from_bic[:8]:
+                    branch = bic_upper[:8] if len(bic_upper) > 8 else ''
+                    return to_bic[:8] + branch
+                
+            return None
+        
+        count=0
+
+        for grphdr in root.xpath(".//*[local-name()='GrpHdr']"):
+            for bic_tag in ('BICFI', 'BIC'):
+                for elem in grphdr.xpath(f".//*[local-name()='{bic_tag}']"):
+                    if id(elem) in processed_ids:
+                        continue
+                    if not elem.text or not elem.text.strip():
+                        continue
+                    original = elem.text.strip()
+                    new_bic = apply_specific_replacements(original)
+                    if new_bic is not None:
+                        logger.debug(
+                            "[GRPHDR_BIC] alt wert=%s   neuer wert=%s", original, new_bic
+
+                        )
+                        elem.text = new_bic
+                        processed_ids.add(id(elem))
+                        count += 1
+        return count
+    
+    def _replace_service_indicators(self, root:etree._Element) -> int:
+        """
+        Ersetzt Service-Bezeichner für Test-Umgebungen. 
+
+        SWIFT-MX: <Service> im DataDPU-Envelope
+            prod_value -> test_value
+        SEPA: <Svc> im AppHdr
+            prod_value -> test_value
+        """
+        count = 0
+
+        if self.config.swift_mx_service_enabled:
+            prod = self.config.swift_mx_service_prod
+            test = self.config.swift_mx_service_test
+
+            if not prod:
+                logger.warning(
+                    "swift_mx service_replacement aktiviert aber prod_value leer."                    
+                )
+            else:
+                for elem in root.xpath(".//*[local-name()='Service]'"):
+                    if elem.text and prod in elem.text:
+                        logger.debug(
+                            "[SERVICE_MX] alt wert=%s    neuer wert=%s",elem.text.strip(), elem.text.replace(prod, test).strip()
+                        )
+                        elem.text = elem.text.replace(prod, test)
+                        count += 1
+
+        if self.config.sepa_service_enabled:
+            prod = self.config.sepa_service_prod
+            test = self.config.sepa_service_test
+            if not prod:
+                logger.warning(
+                    "sepa service_replacement aktivert aber prod_value leer."
+                )
+            else:
+                for apphdr in root.xpath(".//*[local-name()='AppHdr']"):
+                    for svc in apphdr.xpath(".//*[local-name()='Svc']"):
+                        if svc.text and prod in svc.text:
+                            logger.debug(
+                                "[SERVICE_SEPA] alt wert=%s    neuer wert=%s",svc.text.strip(), svc.text.replace(prod, test).strip()
+                            )
+                            svc.text = svc.text.replace(prod, test)
+                            count += 1
+            return count
+        
     def anonymize(self, content: str) -> Tuple[str, int]:
         """
         Anonymisiert eine ISO 20022 XML-Nachricht.
@@ -362,7 +482,9 @@ class ISO20022Anonymizer(BaseAnonymizer):
             xml_bytes = etree.tostring(
                 root, encoding='UTF-8', pretty_print=True, xml_declaration=True
             )
-            #return xml_bytes.decode('utf-8'), self.fields_anonymized
+            ## -- Schritt 3: Header-Modifikationen
+            self.fields_anonymized += self._replace_grphdr_bic(root, processed_ids)
+            self._replace_service_indicators(root)
             xml_str = etree.tostring(root, encoding='unicode', pretty_print=True)
             result  = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str
             return result, self.fields_anonymized
