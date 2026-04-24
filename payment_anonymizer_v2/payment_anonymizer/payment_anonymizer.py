@@ -8,6 +8,7 @@ Validierung und Logging.
 
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -56,6 +57,7 @@ class PaymentAnonymizer:
             'output_path':        self.config.output_path,
             'log_path':           self.config.log_path,
             'not_supported_path': self.config.not_supported_path,
+            'archive_path':       self.config.archive_path,
         }
         for name, path in dirs.items():
             p = Path(path)
@@ -67,13 +69,33 @@ class PaymentAnonymizer:
     # -------------------------------------------------------------------------
 
     def _detect_file_type(self, content: str) -> str:
-        """Erkennt den Dateityp (ISO20022 oder SWIFT MT)."""
+        """
+        Erkennt den Dateityp (ISO20022 oder SWIFT MT).
+
+        ISO 20022-Erkennung prüft drei Varianten:
+        1. Standard:    <?xml ... oder <Document
+        2. Namespace:   urn:iso:std:iso:20022 im Inhalt (SEPA Bulk etc.)
+        3. Präfix-XML:  <BBkICF:... mit xmlns-Attribut
+        """
+        # Standard ISO 20022
         if '<?xml' in content[:100] or '<Document' in content[:500]:
             return 'ISO20022'
+
+        # Präfix-Namespace z.B. <BBkICF:FIToFICstmrCdtTrf xmlns:BBkICF="urn:iso:std:iso:20022..."
+        if re.search(r'urn:iso:std:iso:20022', content[:2000]):
+            return 'ISO20022'
+
+        # XML mit beliebigem Namespace-Präfix auf Root-Element
+        if re.search(r'<[A-Za-z][A-Za-z0-9]*:[A-Za-z]', content[:500]) \
+                and 'xmlns' in content[:2000]:
+            return 'ISO20022'
+
+        # SWIFT MT
         if '{1:' in content and '{4:' in content:
             return 'SWIFT_MT'
         if re.search(r':\d{2}[A-Z]?:', content):
             return 'SWIFT_MT'
+
         return 'UNKNOWN'
 
     def _get_output_filename(self, input_path: Path) -> Path:
@@ -109,10 +131,8 @@ class PaymentAnonymizer:
 
     def _move_to_not_supported(self, input_path: Path) -> Path:
         """
-        Verschiebt eine nicht unterstützte Datei in den not_supported_path.
-
-        Existiert eine Datei mit gleichem Namen bereits im Zielordner,
-        wird eine laufende Nummer angehängt.
+        Kopiert eine nicht unterstützte Datei in den not_supported_path.
+        Die Originaldatei im Input-Verzeichnis bleibt erhalten.
         """
         target_dir = Path(self.config.not_supported_path)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -126,10 +146,38 @@ class PaymentAnonymizer:
                 )
                 counter += 1
 
+        shutil.copy2(input_path, target_path)
+        logger.info(
+            "Nicht unterstützter Nachrichtentyp – kopiert nach: %s "
+            "(Original bleibt in: %s)",
+            target_path, input_path
+        )
+        return target_path
+
+    def _archive_input_file(self, input_path: Path) -> Path:
+        """
+        Verschiebt eine erfolgreich verarbeitete Datei ins Archiv-Verzeichnis.
+
+        Existiert eine Datei mit gleichem Namen bereits im Archiv,
+        wird eine laufende Nummer angehängt.
+        Wird nur aufgerufen wenn archive_after_processing: true.
+        """
+        target_dir = Path(self.config.archive_path)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target_path = target_dir / input_path.name
+        if target_path.exists():
+            counter = 1
+            while target_path.exists():
+                target_path = target_dir / (
+                    f"{input_path.stem}_{counter}{input_path.suffix}"
+                )
+                counter += 1
+
         input_path.rename(target_path)
         logger.info(
-            "Nicht unterstützter Nachrichtentyp – verschoben nach: %s",
-            target_path
+            "Archiviert: %s → %s",
+            input_path, target_path
         )
         return target_path
 
@@ -179,7 +227,7 @@ class PaymentAnonymizer:
                 result.status        = 'SKIPPED'
                 result.error_message = (
                     f"Nachrichtentyp '{result.message_type}' nicht unterstützt – "
-                    f"verschoben nach: {moved_to}"
+                    f"kopiert nach: {moved_to}"
                 )
                 logger.warning(result.error_message)
                 return result
@@ -222,14 +270,18 @@ class PaymentAnonymizer:
                 input_path, output_path, fields_count
             )
 
+            # ── Eingabedatei archivieren wenn konfiguriert ────────────────
+            if self.config.archive_after_processing:
+                self._archive_input_file(input_path)
+
         except Exception as e:
             result.status        = 'ERROR'
             result.error_message = str(e)
             logger.error("Fehler bei %s: %s", input_path, e)
 
         finally:
-            end_time                   = datetime.now()
-            result.processing_time_ms  = (
+            end_time                  = datetime.now()
+            result.processing_time_ms = (
                 (end_time - start_time).total_seconds() * 1000
             )
 
@@ -239,22 +291,21 @@ class PaymentAnonymizer:
     # Mehrere Dateien / Wildcard verarbeiten
     # -------------------------------------------------------------------------
 
-    def process_files(self, pattern: str) -> List[AnonymizationResult]:
+    def process_files(self, pattern) -> List[AnonymizationResult]:
         """
         Verarbeitet alle Dateien die einem Pfad-Muster entsprechen.
 
-        Unterstützt:
-        - Einzelne Datei:     'input/pacs.008.xml'
-        - Wildcard Dateiname: 'input/pacs.*.xml'
-        - Wildcard Verz.:     'input/*/pacs.008.xml'
-        - Mehrere Muster:     'input/pacs.008.xml,input/pacs.009.xml'
-                              (kommagetrennt)
-        - Rekursiv:           'input/**/*.xml'
-
-        Gibt alle Ergebnisse zurück und schreibt das Log.
+        Akzeptiert:
+        - str:  Einzelnes Muster oder kommagetrennte Muster
+        - list: Liste von Pfaden (Shell-Expansion via nargs='+')
         """
-        results  = []
-        patterns = [p.strip() for p in pattern.split(',') if p.strip()]
+        results = []
+
+        # Liste und String vereinheitlichen
+        if isinstance(pattern, list):
+            patterns = [p.strip() for p in pattern if p.strip()]
+        else:
+            patterns = [p.strip() for p in pattern.split(',') if p.strip()]
 
         for pat in patterns:
             matched = self._resolve_pattern(pat)
@@ -288,16 +339,14 @@ class PaymentAnonymizer:
     def _resolve_pattern(self, pattern: str) -> List[Path]:
         """
         Löst ein Pfad-Muster in eine Liste von Path-Objekten auf.
-
         Unterstützt glob-Wildcards (* ? **).
-        Ist pattern ein direkter Dateipfad ohne Wildcards und die Datei
-        existiert, wird sie direkt zurückgegeben.
         """
         path = Path(pattern)
 
         # Direkter Dateipfad ohne Wildcard
         if '*' not in pattern and '?' not in pattern:
             if path.is_file():
+                logger.debug("Direkte Datei: %s", pattern)
                 return [path]
             logger.warning("Datei nicht gefunden: %s", pattern)
             return []
@@ -309,7 +358,6 @@ class PaymentAnonymizer:
             parent  = path.parent if str(path.parent) != '.' else Path('.')
             matched = list(parent.glob(path.name))
 
-        # Nur Dateien, keine Verzeichnisse
         return [p for p in matched if p.is_file()]
 
     # -------------------------------------------------------------------------
@@ -375,6 +423,12 @@ class PaymentAnonymizer:
         print(f"  ISO 20022: {', '.join(iso_types) if iso_types else '–'}")
         print(f"  SWIFT MT:  {', '.join(mt_types)  if mt_types  else '–'}")
 
+        # Verhalten nach Verarbeitung
+        archive_enabled = self.config.archive_after_processing
+        print(f"\nVerhalten nach Verarbeitung:")
+        print(f"  - Archivierung (input → archive): "
+              f"{'Ja (' + self.config.archive_path + ')' if archive_enabled else 'Nein'}")
+
         print("\nAktive Anonymisierungseinstellungen:")
         print(f"  - IBAN:              {'Ja' if self.config.anonymize_iban else 'Nein'}")
         print(f"  - BIC:               {'Ja' if self.config.anonymize_bic else 'Nein'}")
@@ -385,15 +439,17 @@ class PaymentAnonymizer:
         print(f"  - MT :86:-Feld:      {'Ja' if self.config.anonymize_mt_field_86 else 'Nein'}")
 
         print("\nAktive Header-Modifikationen:")
-        print(f"  - GrpHdr BIC:        {'Ja' if self.config.grphdr_bic_enabled else 'Nein'}", end="")
+        print(f"  - GrpHdr/SWIFT Header BIC: "
+              f"{'Ja' if self.config.grphdr_bic_enabled else 'Nein'}", end="")
         if self.config.grphdr_bic_enabled:
             replacements = self.config.grphdr_bic_replacements
             if replacements:
                 pairs = ', '.join(f"{r['from']} → {r['to']}" for r in replacements)
-                print(f"  ({pairs})", end="")
+                print(f"  ({pairs})  [ISO20022 GrpHdr + SWIFT Block 1/2]", end="")
         print()
 
-        print(f"  - SWIFT MX Service:  {'Ja' if self.config.swift_mx_service_enabled else 'Nein'}", end="")
+        print(f"  - SWIFT MX Service:  "
+              f"{'Ja' if self.config.swift_mx_service_enabled else 'Nein'}", end="")
         if self.config.swift_mx_service_enabled:
             prod = self.config.swift_mx_service_prod
             test = self.config.swift_mx_service_test
@@ -403,7 +459,8 @@ class PaymentAnonymizer:
                 print("  !! prod_value oder test_value fehlt in config.json !!", end="")
         print()
 
-        print(f"  - SEPA Service:      {'Ja' if self.config.sepa_service_enabled else 'Nein'}", end="")
+        print(f"  - SEPA Service:      "
+              f"{'Ja' if self.config.sepa_service_enabled else 'Nein'}", end="")
         if self.config.sepa_service_enabled:
             prod = self.config.sepa_service_prod
             test = self.config.sepa_service_test
