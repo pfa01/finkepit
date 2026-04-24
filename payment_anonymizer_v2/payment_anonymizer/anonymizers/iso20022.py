@@ -89,14 +89,26 @@ class ISO20022Anonymizer(BaseAnonymizer):
     # -------------------------------------------------------------------------
 
     def _detect_namespace(self, root: etree._Element) -> Optional[str]:
-        """Erkennt den Namespace der XML-Nachricht."""
+        """
+        Erkennt den ISO-20022-Namespace der XML-Nachricht.
+
+        Unterstützte Strukturen:
+        1. Default-Namespace:  xmlns="urn:iso:std:iso:20022:..."
+        2. DataPDU-Envelope:   SAA-Wrapper mit Document/AppHdr innen
+        3. Präfix-Namespace:   xmlns:BBkICF="urn:iso:std:iso:20022:..."
+           z.B. SEPA-Bulk:    <BBkICF:FIToFICstmrCdtTrf xmlns:BBkICF="...">
+        4. Namespace im QName: Root-Tag enthält URI direkt als {ns}local
+        5. Tiefere Elemente:   Namespace in Kind-Elementen deklariert
+        """
         nsmap = root.nsmap
 
+        # 1. Default-Namespace (kein Präfix)
         if None in nsmap:
             ns = nsmap[None]
-            if 'iso:std:iso:20022' in ns:
+            if ns and 'iso:std:iso:20022' in ns:
                 return ns
 
+        # 2. SAA DataPDU-Envelope
         root_local = etree.QName(root.tag).localname
         if root_local == 'DataPDU':
             for elem in root.iter():
@@ -112,10 +124,33 @@ class ISO20022Anonymizer(BaseAnonymizer):
                     if hdr_ns and 'iso:std:iso:20022' in hdr_ns:
                         return hdr_ns
 
+        # 3. Präfix-Namespace – alle deklarierten Namespaces prüfen
+        # Erfasst z.B. xmlns:BBkICF="urn:iso:std:iso:20022:..."
         for ns in nsmap.values():
-            if 'iso:std:iso:20022' in ns:
+            if ns and 'iso:std:iso:20022' in ns:
                 return ns
 
+        # 4. Namespace direkt aus dem QName des Root-Elements
+        try:
+            root_ns = etree.QName(root.tag).namespace
+            if root_ns and 'iso:std:iso:20022' in root_ns:
+                return root_ns
+        except Exception:
+            pass
+
+        # 5. Fallback: in Kind-Elementen suchen (max. 50 Elemente)
+        for i, elem in enumerate(root.iter()):
+            if i >= 50:
+                break
+            for ns in (elem.nsmap or {}).values():
+                if ns and 'iso:std:iso:20022' in ns:
+                    return ns
+
+        logger.warning(
+            "ISO-20022-Namespace nicht gefunden. "
+            "Root-Tag: %s, nsmap: %s",
+            root.tag, root.nsmap
+        )
         return None
 
     def _detect_message_type(self, namespace: str) -> str:
