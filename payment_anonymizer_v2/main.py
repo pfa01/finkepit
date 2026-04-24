@@ -7,14 +7,16 @@ CLI-Einstiegspunkt für den Payment Message Anonymizer.
 
 Verwendung
 ----------
-  python main.py                        # Verarbeitet alle Dateien mit Standard-Config
-  python main.py -c custom_config.json  # Verwendet eigene Konfiguration
-  python main.py -f einzelne_datei.xml  # Verarbeitet eine einzelne Datei
+  python main.py                              # Ganzes Input-Verzeichnis
+  python main.py -c custom_config.json        # Eigene Konfiguration
+  python main.py -f einzelne_datei.xml        # Einzelne Datei
+  python main.py -f "input/pacs.*.xml"        # Wildcard
+  python main.py -f "input/*.xml,input/*.fin" # Mehrere Muster
+  python main.py -f "input/**/*.xml"          # Rekursiv
 """
 
 import argparse
 import sys
-from pathlib import Path
 
 from payment_anonymizer import PaymentAnonymizer
 
@@ -23,15 +25,32 @@ def main():
     """Haupteinstiegspunkt."""
     parser = argparse.ArgumentParser(
         description=(
-            'Payment Message Anonymizer - '
+            'Payment Message Anonymizer – '
             'Anonymisiert ISO 20022 und SWIFT MT Nachrichten'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Beispiele:
-  python main.py                        # Verarbeitet alle Dateien mit Standard-Config
-  python main.py -c custom_config.json  # Verwendet eigene Konfiguration
-  python main.py -f einzelne_datei.xml  # Verarbeitet eine einzelne Datei
+  python main.py
+      Verarbeitet alle Dateien im konfigurierten Input-Verzeichnis.
+
+  python main.py -c custom_config.json
+      Verwendet eine eigene Konfigurationsdatei.
+
+  python main.py -f input/pacs.008.xml
+      Verarbeitet eine einzelne Datei.
+
+  python main.py -f "input/pacs.*.xml"
+      Verarbeitet alle pacs-Dateien im input-Verzeichnis (Wildcard).
+
+  python main.py -f "input/*.xml,input/*.fin"
+      Mehrere Muster kommagetrennt.
+
+  python main.py -f "input/**/*.xml"
+      Alle XML-Dateien rekursiv in Unterverzeichnissen.
+
+  python main.py -v
+      Ausführliche Fehlerausgabe (Stacktrace).
         """
     )
 
@@ -42,12 +61,19 @@ Beispiele:
     )
     parser.add_argument(
         '-f', '--file',
-        help='Einzelne Datei verarbeiten (statt ganzes Verzeichnis)'
+        help=(
+            'Datei(en) verarbeiten statt ganzes Verzeichnis.\n'
+            'Unterstützt Wildcards und kommagetrennte Muster:\n'
+            '  Einzeldatei:  input/pacs.008.xml\n'
+            '  Wildcard:     "input/pacs.*.xml"\n'
+            '  Mehrere:      "input/*.xml,input/*.fin"\n'
+            '  Rekursiv:     "input/**/*.xml"'
+        )
     )
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='Ausführliche Ausgabe'
+        help='Ausführliche Ausgabe bei Fehlern (Stacktrace)'
     )
 
     args = parser.parse_args()
@@ -56,10 +82,8 @@ Beispiele:
         anonymizer = PaymentAnonymizer(args.config)
 
         if args.file:
-            result = anonymizer.process_file(Path(args.file))
-            anonymizer.logger.add_result(result)
-            anonymizer.logger.write_log()
-            anonymizer.print_summary([result])
+            results = anonymizer.process_files(args.file)
+            anonymizer.print_summary(results)
         else:
             results = anonymizer.process_directory()
             anonymizer.print_summary(results)
