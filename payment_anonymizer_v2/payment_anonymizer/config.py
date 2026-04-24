@@ -2,21 +2,7 @@
 """
 config.py
 =========
-Konfigurationsmanager mit entitätsbasierter, deterministischer Auswahl.
-
-Auswahllogik
-------------
-Alle Ersetzungen nutzen **einen gemeinsamen Entity-Index**, der für jede
-neue Original→Dummy-Zuordnung um 1 erhöht wird (Round-Robin). Dadurch ist
-die Reihenfolge der Ersetzungen innerhalb eines Dokuments vollständig
-deterministisch und nachvollziehbar.
-
-Partei-weise Zuordnung
------------------------
-``get_or_assign_entity(name, is_company)`` stellt sicher, dass derselbe
-Originalname innerhalb einer Datei immer dieselbe Entität erhält.
-So werden Name, IBAN, BIC und Adresse einer Partei konsistent aus einem
-einzigen Datensatz bezogen.
+Konfigurationsmanager mit entitaetsbasierter, deterministischer Auswahl.
 """
 
 import json
@@ -36,11 +22,10 @@ class Config:
         self.config_path = Path(config_path)
         self.data = self._load_config()
         self._validate_default()
-        self._person_index = 0
-        self._company_index = 0
-        self._entity_index = 0
+        self._person_index    = 0
+        self._company_index   = 0
+        self._entity_index    = 0
         self._remittance_index = 0
-        # Name → Entität-Zuordnung (wird pro Datei zurückgesetzt)
         self._entity_assignments: Dict[str, Dict[str, Any]] = {}
 
     # -------------------------------------------------------------------------
@@ -56,18 +41,18 @@ class Config:
     def _validate_default(self):
         required = {'first_name', 'last_name', 'company_name', 'iban', 'bic',
                     'address', 'email', 'phone', 'remittance'}
-        default = self.data.get('dummy_data', {}).get('default', {})
-        missing = required - set(default.keys())
+        default  = self.data.get('dummy_data', {}).get('default', {})
+        missing  = required - set(default.keys())
         if missing:
             raise ValueError(
-                f"Unvollständiger Default-Eintrag in config.json. "
+                f"Unvollstaendiger Default-Eintrag in config.json. "
                 f"Fehlende Felder: {', '.join(sorted(missing))}"
             )
         addr_required = {'street', 'postal_code', 'city', 'country'}
-        addr_missing = addr_required - set(default.get('address', {}).keys())
+        addr_missing  = addr_required - set(default.get('address', {}).keys())
         if addr_missing:
             raise ValueError(
-                f"Unvollständige Default-Adresse. "
+                f"Unvollstaendige Default-Adresse. "
                 f"Fehlende Felder: {', '.join(sorted(addr_missing))}"
             )
 
@@ -100,94 +85,151 @@ class Config:
         return self.data.get('anonymization', {}).get('anonymize_contact', True)
 
     @property
+    def anonymize_mt_field_86(self) -> bool:
+        """Steuert ob das :86:-Feld in MT940/942/950 anonymisiert wird."""
+        return self.data.get('anonymization', {}).get('anonymize_mt_field_86', True)
+
+    # -------------------------------------------------------------------------
+    # Header-Modifikation
+    # -------------------------------------------------------------------------
+
+    @property
     def grphdr_bic_enabled(self) -> bool:
-        return self.data.get('header_modification', {}).get('modify_grphdr_bic',False)
+        return self.data.get('header_modification', {}) \
+                        .get('modify_grphdr_bic', False)
 
     @property
     def grphdr_bic_replacements(self) -> list:
         """
-        Gibt die BIC-Ersetzungen für den GrpHdr zurück. 
-        Der from-Wert wird als 8-Zeichen-Präfix geprüft,
-        damit werden BIC8 und BIC11 erfasst.
+        BIC-Ersetzungen fuer GrpHdr und SWIFT-Header-Bloecke.
+        8-Zeichen-Praefix-Vergleich – BIC8, BIC11 und LT-Adresse (12 Zeichen)
+        werden alle erfasst.
         """
-        return self.data.get('header_modification',{}) \
+        return self.data.get('header_modification', {}) \
                         .get('grphdr_bic', {}) \
-                        .get('bic_replacements',[])
+                        .get('bic_replacements', [])
 
     @property
     def swift_mx_service_enabled(self) -> bool:
         return self.data.get('header_modification', {}) \
-                        .get('modify_swift_mx_service',False)
+                        .get('modify_swift_mx_service', False)
 
     @property
     def swift_mx_service_prod(self) -> str:
         return self.data.get('header_modification', {}) \
-                        .get('service_replacement',{}) \
+                        .get('service_replacement', {}) \
                         .get('swift_mx', {}) \
-                        .get('prod_value','')
+                        .get('prod_value', '')
 
     @property
     def swift_mx_service_test(self) -> str:
         return self.data.get('header_modification', {}) \
-                        .get('service_replacement',{}) \
+                        .get('service_replacement', {}) \
                         .get('swift_mx', {}) \
-                        .get('test_value','')
-
+                        .get('test_value', '')
 
     @property
     def sepa_service_enabled(self) -> bool:
         return self.data.get('header_modification', {}) \
-                        .get('modify_sepa_service',False)
-
+                        .get('modify_sepa_service', False)
 
     @property
     def sepa_service_prod(self) -> str:
         return self.data.get('header_modification', {}) \
-                        .get('service_replacement',{}) \
-                        .get('swift', {}) \
-                        .get('prod_value','')
-
+                        .get('service_replacement', {}) \
+                        .get('sepa', {}) \
+                        .get('prod_value', '')
 
     @property
     def sepa_service_test(self) -> str:
         return self.data.get('header_modification', {}) \
-                        .get('service_replacement',{}) \
-                        .get('swift', {}) \
-                        .get('test_value','')
+                        .get('service_replacement', {}) \
+                        .get('sepa', {}) \
+                        .get('test_value', '')
 
-
-    
     # -------------------------------------------------------------------------
-    # Default-Entität
+    # Unterstuetzte Nachrichtentypen
+    # -------------------------------------------------------------------------
+
+    @property
+    def supported_message_types(self) -> list:
+        """
+        Gibt alle unterstuetzten Nachrichtentypen als flache Liste zurueck.
+
+        ISO 20022 und SWIFT MT werden aus den jeweiligen Unterabschnitten
+        zusammengefuehrt. Fallback: leere Liste.
+        """
+        section  = self.data.get('supported_message_types', {})
+        iso_list = section.get('iso20022', [])
+        mt_list  = section.get('swift_mt', [])
+        return iso_list + mt_list
+
+    # -------------------------------------------------------------------------
+    # Pfad-Konfiguration
+    # -------------------------------------------------------------------------
+
+    @property
+    def input_path(self) -> str:
+        return self.data['paths']['input_path']
+
+    @property
+    def output_path(self) -> str:
+        return self.data['paths']['output_path']
+
+    @property
+    def log_path(self) -> str:
+        return self.data['paths']['log_path']
+
+    @property
+    def not_supported_path(self) -> str:
+        """Zielverzeichnis fuer nicht unterstuetzte Nachrichtentypen."""
+        return self.data['paths'].get('not_supported_path', 'not_supported/')
+
+    @property
+    def prefix(self) -> str:
+        return self.data['file_handling']['prefix']
+
+    @property
+    def suffix(self) -> str:
+        return self.data['file_handling']['suffix']
+
+    @property
+    def file_extensions(self) -> List[str]:
+        return self.data['file_handling']['file_extensions']
+
+    @property
+    def swift_mt_message_separator(self) -> str:
+        """
+        Trennzeichen zwischen mehreren MT-Nachrichten in einer Datei.
+        Standard: '$' (ISO 15022 Multi-Message-Format).
+        """
+        return self.data.get('file_handling', {}).get(
+            'swift_mt_message_separator', '$'
+        )
+
+    # -------------------------------------------------------------------------
+    # Default-Entitaet
     # -------------------------------------------------------------------------
 
     def get_default(self) -> Dict[str, Any]:
-        """Gibt den Default-Datensatz zurück (immer verfügbar als Fallback)."""
+        """Gibt den Default-Datensatz zurueck (immer verfuegbar als Fallback)."""
         return self.data['dummy_data']['default']
 
     # -------------------------------------------------------------------------
-    # Partei-weise Entitätszuordnung  ←  NEU
+    # Partei-weise Entitaetszuordnung
     # -------------------------------------------------------------------------
 
     def get_or_assign_entity(self, original_name: str,
                               is_company: bool) -> Dict[str, Any]:
         """
-        Gibt die Entität zurück, die diesem Namen zugeordnet wurde.
+        Gibt die Entitaet zurueck, die diesem Namen zugeordnet wurde.
 
-        Neue Namen erhalten die nächste Entität aus dem passenden Pool
+        Neue Namen erhalten die naechste Entitaet aus dem passenden Pool
         (Round-Robin). Wird derselbe Name erneut aufgerufen, kommt immer
-        dieselbe Entität zurück → Name, IBAN, BIC und Adresse einer Partei
-        stammen garantiert aus demselben Datensatz.
-
-        Parameters
-        ----------
-        original_name : str
-            Originalname (Personen- oder Firmenname) vor der Anonymisierung.
-        is_company : bool
-            True → Firmen-Pool, False → Personen-Pool.
+        dieselbe Entitaet zurueck.
         """
         prefix = 'CO' if is_company else 'PE'
-        key = f"{prefix}:{original_name}"
+        key    = f"{prefix}:{original_name}"
         if key not in self._entity_assignments:
             if is_company:
                 self._entity_assignments[key] = self.get_next_company_entity()
@@ -242,9 +284,9 @@ class Config:
     # -------------------------------------------------------------------------
 
     def get_next_entity(self) -> Dict[str, Any]:
-        """Round-Robin über Persons + Companies (für Felder ohne Partei-Kontext)."""
-        persons   = self.data['dummy_data'].get('persons', [])
-        companies = self.data['dummy_data'].get('companies', [])
+        """Round-Robin ueber Persons + Companies."""
+        persons      = self.data['dummy_data'].get('persons', [])
+        companies    = self.data['dummy_data'].get('companies', [])
         all_entities = persons + companies
         if not all_entities:
             return self.get_default()
@@ -269,37 +311,10 @@ class Config:
     # -------------------------------------------------------------------------
 
     def reset_indices(self):
-        """Setzt alle Indizes und Zuordnungen zurück (für neue Datei)."""
-        #self._person_index = 0
-        #self._company_index = 0
-        #self._entity_index = 0
-        #self._remittance_index = 0
-        self._entity_assignments = {}     # Partei-Zuordnungen ebenfalls löschen
+        """
+        Setzt den Zuordnungs-Cache fuer eine neue Datei zurueck.
 
-    # -------------------------------------------------------------------------
-    # Pfad-Konfiguration
-    # -------------------------------------------------------------------------
-
-    @property
-    def input_path(self) -> str:
-        return self.data['paths']['input_path']
-
-    @property
-    def output_path(self) -> str:
-        return self.data['paths']['output_path']
-
-    @property
-    def log_path(self) -> str:
-        return self.data['paths']['log_path']
-
-    @property
-    def prefix(self) -> str:
-        return self.data['file_handling']['prefix']
-
-    @property
-    def suffix(self) -> str:
-        return self.data['file_handling']['suffix']
-
-    @property
-    def file_extensions(self) -> List[str]:
-        return self.data['file_handling']['file_extensions']
+        Die Round-Robin-Indizes laufen bewusst ueber alle Dateien durch –
+        jede Datei bekommt so die naechste Entitaet aus dem Pool.
+        """
+        self._entity_assignments = {}
