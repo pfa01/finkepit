@@ -138,12 +138,18 @@ class ISO20022Anonymizer(BaseAnonymizer):
         except Exception:
             pass
 
-        # 5. Fallback: in Kind-Elementen suchen (max. 50 Elemente)
+        # 5. Fallback: in Kind-Elementen suchen (max. 200 Elemente)
+        # Noetig fuer SEPA Bulk (BBkICF-Wrapper) wo der ISO-Namespace
+        # erst auf einem tiefer liegenden Element deklariert ist.
         for i, elem in enumerate(root.iter()):
-            if i >= 50:
+            if i >= 200:
                 break
             for ns in (elem.nsmap or {}).values():
                 if ns and 'iso:std:iso:20022' in ns:
+                    logger.debug(
+                        "ISO-20022-Namespace in Kind-Element %d gefunden: %s",
+                        i, ns
+                    )
                     return ns
 
         logger.warning(
@@ -154,10 +160,18 @@ class ISO20022Anonymizer(BaseAnonymizer):
         return None
 
     def _detect_message_type(self, namespace: str) -> str:
-        """Erkennt den Nachrichtentyp aus dem Namespace."""
+        """
+        Erkennt den Nachrichtentyp aus dem Namespace.
+
+        Unterstützte Namespace-Formate:
+        Standard:  urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08
+        SEPA Bulk: urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
+                                                   ^^^^
+                   Optionales Infix (sct:, cbpr:, fi: etc.) wird übersprungen.
+        """
         if not namespace:
             return "UNKNOWN"
-        match = re.search(r'xsd:([a-z]+\.\d+)', namespace)
+        match = re.search(r'xsd:(?:[a-z]+:)?([a-z]+\.\d+)', namespace)
         if match:
             return match.group(1)
         return "UNKNOWN"
