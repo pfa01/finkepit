@@ -1,39 +1,29 @@
 {
   "paths": {
-    "input_path":  "input/",
-    "output_path": "output/",
-    "log_path":    "logs/",
-    "not_supported_path": "not_supported/"
+    "input_path":         "input/",
+    "output_path":        "output/",
+    "log_path":           "logs/",
+    "not_supported_path": "not_supported/",
+    "archive_path":       "archive/"
   },
-  
-  "suporrted_message_types": {
-    "_comment": "Unterstütze Nachrichtentypen. Alles andere wird in den not_supported_path verschoben. Eingabe ohne Versionsangaben",
-    "iso_20022": [
-        "camt.052",
-        "camt.053",
-        "camt.054",
-        "pain.001",
-        "pain.009",
-        "pacs.002",
-        "pacs.008",
-        "pacs.009",
-        "pacs.010"
-    ],
 
-    "iso_15022": [
-      "MT900",
-      "MT910",
-      "MT940",
-      "MT942",
-      "MT950"
+  "supported_message_types": {
+    "_comment": "Unterstützte Nachrichtentypen. Alles andere wird in not_supported_path kopiert. Präfix-Vergleich – Versionsangaben werden automatisch erfasst.",
+    "iso20022": [
+      "camt.052", "camt.053", "camt.054",
+      "pain.001", "pain.009",
+      "pacs.002", "pacs.008", "pacs.009", "pacs.010"
+    ],
+    "swift_mt": [
+      "MT900", "MT910", "MT940", "MT942", "MT950"
     ]
   },
 
   "file_handling": {
-    "prefix":          "",
-    "suffix":          "_anon",
-    "file_extensions": [".xml", ".txt", ".fin"],
-    "swift_msg_seperator": "$"
+    "prefix":                     "",
+    "suffix":                     "_anon",
+    "file_extensions":            [".xml", ".txt", ".fin"],
+    "swift_mt_message_separator": "$"
   },
 
   "anonymization": {
@@ -47,39 +37,35 @@
   },
 
   "header_modification": {
-    "_comment": "Einstellungen für die Anpassungen von GrpHdr-BICs und Service-Indikatoren",
-
-    "modify_grphdr_bic":        true,
-    "modify_swift_mx_service":  true,
-    "modify_sepa_service":      true,
+    "_comment": "Analog zur anonymization-Gruppe steuern die modify_*-Flags das Ein- und Ausschalten.",
+    "modify_grphdr_bic":       true,
+    "modify_swift_mx_service": true,
+    "modify_sepa_service":     true,
 
     "grphdr_bic": {
-      "_comment": "Einstellungen für die Anpassungen von GrpHdr-BICs und Service-Indikatoren",
+      "_comment": "8-Zeichen-Präfix-Vergleich – BIC8, BIC11 und LT-Adresse (12 Zeichen) werden alle erfasst.",
       "bic_replacements": [
-        {
-          "from": "GENOLULL",
-          "to":   "GENOLUL0"
-        }
+        { "from": "GENOLULL", "to": "GENOLUL0" }
       ]
     },
+
     "service_replacement": {
       "swift_mx": {
-        "_comment":"Ersetzt den SAA-Service im DataDPU Envelope (SWIFT MX)",
+        "_comment": "Ersetzt den SAA-Service-Bezeichner im DataPDU-Envelope (SWIFT MX).",
         "prod_value": "swift.finplus",
         "test_value": "swift.finplus!fp"
       },
-      
       "sepa": {
-        "_comment": "Ersetzt den Service-Bezeichner im AppHdr Svc-Element ",
+        "_comment": "Ersetzt den Service-Bezeichner im AppHdr Svc-Element (ISO 20022 BAH).",
         "prod_value": "TBD",
         "test_value": "TBD"
       }
-    }  
+    }
   },
 
-
   "behavior": {
-    "overwrite_existing": false
+    "overwrite_existing":       false,
+    "archive_after_processing": false
   },
 
   "logging": {
@@ -89,12 +75,11 @@
 
   "message_types": {
     "iso20022": { "validate_after": false },
-    "swift_mt": { "validate_after": false }
+    "swift_mt":  { "validate_after": false }
   },
 
   "dummy_data": {
-
-    "_comment_default": "Der Default-Eintrag wird als Fallback verwendet, wenn kein Pool-Eintrag verfügbar ist. Er muss immer vollständig befüllt sein.",
+    "_comment_default": "Der Default-Eintrag wird als Fallback verwendet wenn kein Pool-Eintrag verfügbar ist.",
     "default": {
       "first_name":   "Max",
       "last_name":    "Mustermann",
@@ -112,205 +97,88 @@
       "remittance": "Musterreferenz 0000"
     },
 
-    "_comment_persons": "Jede Person ist ein vollständiger Datensatz: Name, IBAN, BIC, Adresse und Kontakt gehören zusammen.",
+    "_comment_persons": "Jede Person ist ein vollständiger Datensatz.",
     "persons": [
       {
-        "first_name": "Anna",
-        "last_name":  "Bauer TST",
-        "iban":       "DE89370400440532013000",
-        "bic":        "COBADEFFXXX",
-        "address": {
-          "street":      "Hauptstraße 12",
-          "postal_code": "10115",
-          "city":        "Berlin",
-          "country":     "DE"
-        },
-        "email": "anna.bauer@example.com",
-        "phone": "+49 30 12345001",
-        "remittance": "Rechnung 2024-001"
+        "first_name": "Anna", "last_name": "Bauer TST",
+        "iban": "DE89370400440532013000", "bic": "COBADEFFXXX",
+        "address": { "street": "Hauptstraße 12", "postal_code": "10115", "city": "Berlin", "country": "DE" },
+        "email": "anna.bauer@example.com", "phone": "+49 30 12345001", "remittance": "Rechnung 2024-001"
       },
       {
-        "first_name": "Thomas",
-        "last_name":  "Berger TST",
-        "iban":       "DE27100777770209299700",
-        "bic":        "DEUTDEDBBER",
-        "address": {
-          "street":      "Lindenweg 5",
-          "postal_code": "20095",
-          "city":        "Hamburg",
-          "country":     "DE"
-        },
-        "email": "thomas.berger@example.com",
-        "phone": "+49 40 23456002",
-        "remittance": "Rechnung 2024-002"
+        "first_name": "Thomas", "last_name": "Berger TST",
+        "iban": "DE27100777770209299700", "bic": "DEUTDEDBBER",
+        "address": { "street": "Lindenweg 5", "postal_code": "20095", "city": "Hamburg", "country": "DE" },
+        "email": "thomas.berger@example.com", "phone": "+49 40 23456002", "remittance": "Rechnung 2024-002"
       },
       {
-        "first_name": "Sandra",
-        "last_name":  "Conrad TST",
-        "iban":       "DE75512108001245126199",
-        "bic":        "SSKMDEMMXXX",
-        "address": {
-          "street":      "Gartenstraße 8",
-          "postal_code": "80331",
-          "city":        "München",
-          "country":     "DE"
-        },
-        "email": "sandra.conrad@example.com",
-        "phone": "+49 89 34567003",
-        "remittance": "Rechnung 2024-003"
+        "first_name": "Sandra", "last_name": "Conrad TST",
+        "iban": "DE75512108001245126199", "bic": "SSKMDEMMXXX",
+        "address": { "street": "Gartenstraße 8", "postal_code": "80331", "city": "München", "country": "DE" },
+        "email": "sandra.conrad@example.com", "phone": "+49 89 34567003", "remittance": "Rechnung 2024-003"
       },
       {
-        "first_name": "Klaus",
-        "last_name":  "Dietrich TST",
-        "iban":       "DE52940594210020008063",
-        "bic":        "BELADEBEXXX",
-        "address": {
-          "street":      "Schillerstraße 21",
-          "postal_code": "50667",
-          "city":        "Köln",
-          "country":     "DE"
-        },
-        "email": "klaus.dietrich@example.com",
-        "phone": "+49 221 45678004",
-        "remittance": "Rechnung 2024-004"
+        "first_name": "Klaus", "last_name": "Dietrich TST",
+        "iban": "DE52940594210020008063", "bic": "BELADEBEXXX",
+        "address": { "street": "Schillerstraße 21", "postal_code": "50667", "city": "Köln", "country": "DE" },
+        "email": "klaus.dietrich@example.com", "phone": "+49 221 45678004", "remittance": "Rechnung 2024-004"
       },
       {
-        "first_name": "Petra",
-        "last_name":  "Engel TST",
-        "iban":       "DE46500105175407324931",
-        "bic":        "BELADEBEXXX",
-        "address": {
-          "street":      "Rosenweg 3",
-          "postal_code": "60311",
-          "city":        "Frankfurt am Main",
-          "country":     "DE"
-        },
-        "email": "petra.engel@example.com",
-        "phone": "+49 69 56789005",
-        "remittance": "Rechnung 2024-005"
+        "first_name": "Petra", "last_name": "Engel TST",
+        "iban": "DE46500105175407324931", "bic": "BELADEBEXXX",
+        "address": { "street": "Rosenweg 3", "postal_code": "60311", "city": "Frankfurt am Main", "country": "DE" },
+        "email": "petra.engel@example.com", "phone": "+49 69 56789005", "remittance": "Rechnung 2024-005"
       },
       {
-        "first_name": "Michael",
-        "last_name":  "Fischer TST",
-        "iban":       "AT483200000012345864",
-        "bic":        "RLNWATWWXXX",
-        "address": {
-          "street":      "Wiener Gasse 7",
-          "postal_code": "1010",
-          "city":        "Wien",
-          "country":     "AT"
-        },
-        "email": "michael.fischer@example.at",
-        "phone": "+43 1 67890006",
-        "remittance": "Rechnung 2024-006"
+        "first_name": "Michael", "last_name": "Fischer TST",
+        "iban": "AT483200000012345864", "bic": "RLNWATWWXXX",
+        "address": { "street": "Wiener Gasse 7", "postal_code": "1010", "city": "Wien", "country": "AT" },
+        "email": "michael.fischer@example.at", "phone": "+43 1 67890006", "remittance": "Rechnung 2024-006"
       },
       {
-        "first_name": "Laura",
-        "last_name":  "Graf TST",
-        "iban":       "CH5604835012345678009",
-        "bic":        "POFICHBEXXX",
-        "address": {
-          "street":      "Bahnhofstrasse 14",
-          "postal_code": "3011",
-          "city":        "Bern",
-          "country":     "CH"
-        },
-        "email": "laura.graf@example.ch",
-        "phone": "+41 31 78901007",
-        "remittance": "Rechnung 2024-007"
+        "first_name": "Laura", "last_name": "Graf TST",
+        "iban": "CH5604835012345678009", "bic": "POFICHBEXXX",
+        "address": { "street": "Bahnhofstrasse 14", "postal_code": "3011", "city": "Bern", "country": "CH" },
+        "email": "laura.graf@example.ch", "phone": "+41 31 78901007", "remittance": "Rechnung 2024-007"
       },
       {
-        "first_name": "Stefan",
-        "last_name":  "Hoffmann TST",
-        "iban":       "NL91ABNA0417164300",
-        "bic":        "ABNANL2AXXX",
-        "address": {
-          "street":      "Keizersgracht 42",
-          "postal_code": "1015 CX",
-          "city":        "Amsterdam",
-          "country":     "NL"
-        },
-        "email": "stefan.hoffmann@example.nl",
-        "phone": "+31 20 89012008",
-        "remittance": "Rechnung 2024-008"
+        "first_name": "Stefan", "last_name": "Hoffmann TST",
+        "iban": "NL91ABNA0417164300", "bic": "ABNANL2AXXX",
+        "address": { "street": "Keizersgracht 42", "postal_code": "1015 CX", "city": "Amsterdam", "country": "NL" },
+        "email": "stefan.hoffmann@example.nl", "phone": "+31 20 89012008", "remittance": "Rechnung 2024-008"
       }
     ],
 
-    "_comment_companies": "Jede Firma ist ein vollständiger Datensatz: Firmenname, IBAN, BIC, Adresse und Kontakt gehören zusammen.",
+    "_comment_companies": "Jede Firma ist ein vollständiger Datensatz.",
     "companies": [
       {
-        "name": "Alpha Handels GmbH - TEST",
-        "iban": "DE27100777770209299700",
-        "bic":  "DEUTDEDBBER",
-        "address": {
-          "street":      "Gewerbestraße 5",
-          "postal_code": "20095",
-          "city":        "Hamburg",
-          "country":     "DE"
-        },
-        "email": "info@alpha-handels.example.com",
-        "phone": "+49 40 99880001",
-        "remittance": "Lieferantenrechnung 2024-001"
+        "name": "Alpha Handels GmbH - TEST", "iban": "DE27100777770209299700", "bic": "DEUTDEDBBER",
+        "address": { "street": "Gewerbestraße 5", "postal_code": "20095", "city": "Hamburg", "country": "DE" },
+        "email": "info@alpha-handels.example.com", "phone": "+49 40 99880001", "remittance": "Lieferantenrechnung 2024-001"
       },
       {
-        "name": "Beta Finanz AG - TEST",
-        "iban": "DE75512108001245126199",
-        "bic":  "DRESDEFF300",
-        "address": {
-          "street":      "Bankenviertel 1",
-          "postal_code": "60311",
-          "city":        "Frankfurt am Main",
-          "country":     "DE"
-        },
-        "email": "kontakt@beta-finanz.example.com",
-        "phone": "+49 69 11220002",
-        "remittance": "Lieferantenrechnung 2024-002"
+        "name": "Beta Finanz AG - TEST", "iban": "DE75512108001245126199", "bic": "DRESDEFF300",
+        "address": { "street": "Bankenviertel 1", "postal_code": "60311", "city": "Frankfurt am Main", "country": "DE" },
+        "email": "kontakt@beta-finanz.example.com", "phone": "+49 69 11220002", "remittance": "Lieferantenrechnung 2024-002"
       },
       {
-        "name": "Gamma Logistik SE - TEST",
-        "iban": "DE52940594210020008063",
-        "bic":  "SSKMDEMMXXX",
-        "address": {
-          "street":      "Industrieweg 99",
-          "postal_code": "80331",
-          "city":        "München",
-          "country":     "DE"
-        },
-        "email": "service@gamma-logistik.example.com",
-        "phone": "+49 89 33440003",
-        "remittance": "Lieferantenrechnung 2024-003"
+        "name": "Gamma Logistik SE - TEST", "iban": "DE52940594210020008063", "bic": "SSKMDEMMXXX",
+        "address": { "street": "Industrieweg 99", "postal_code": "80331", "city": "München", "country": "DE" },
+        "email": "service@gamma-logistik.example.com", "phone": "+49 89 33440003", "remittance": "Lieferantenrechnung 2024-003"
       },
       {
-        "name": "Delta Holdings GmbH & Co. KG - TEST",
-        "iban": "DE46500105175407324931",
-        "bic":  "BELADEBEXXX",
-        "address": {
-          "street":      "Konzernplatz 3",
-          "postal_code": "10115",
-          "city":        "Berlin",
-          "country":     "DE"
-        },
-        "email": "holding@delta.example.com",
-        "phone": "+49 30 55660004",
-        "remittance": "Lieferantenrechnung 2024-004"
+        "name": "Delta Holdings GmbH & Co. KG - TEST", "iban": "DE46500105175407324931", "bic": "BELADEBEXXX",
+        "address": { "street": "Konzernplatz 3", "postal_code": "10115", "city": "Berlin", "country": "DE" },
+        "email": "holding@delta.example.com", "phone": "+49 30 55660004", "remittance": "Lieferantenrechnung 2024-004"
       },
       {
-        "name": "Epsilon Sparkasse - TEST",
-        "iban": "DE89370400440532013000",
-        "bic":  "COBADEFFXXX",
-        "address": {
-          "street":      "Marktplatz 1",
-          "postal_code": "50667",
-          "city":        "Köln",
-          "country":     "DE"
-        },
-        "email": "info@epsilon-sparkasse.example.com",
-        "phone": "+49 221 77880005",
-        "remittance": "Lieferantenrechnung 2024-005"
+        "name": "Epsilon Sparkasse - TEST", "iban": "DE89370400440532013000", "bic": "COBADEFFXXX",
+        "address": { "street": "Marktplatz 1", "postal_code": "50667", "city": "Köln", "country": "DE" },
+        "email": "info@epsilon-sparkasse.example.com", "phone": "+49 221 77880005", "remittance": "Lieferantenrechnung 2024-005"
       }
     ],
 
-    "_comment_remittance": "Fallback-Pool für Verwendungszwecke, wenn kein Personen-/Firmen-Pool greift.",
+    "_comment_remittance": "Fallback-Pool für Verwendungszwecke.",
     "remittance_texts": [
       "Rechnung 2024-R01",
       "Monatliche Zahlung Januar 2024",
@@ -323,6 +191,5 @@
       "Gehalt Februar 2024",
       "Rechnungsausgleich Nr. 9877"
     ]
-
   }
 }
