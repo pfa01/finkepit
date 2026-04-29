@@ -1,3 +1,5 @@
 requests>=2.31.0
 urllib3>=2.0.0
  
+pip install -r requirements.txt
+python cli.py --url https://company.atlassian.net --username user@corp.com --api-token <TOKEN> --jql "project=PROJ" --all-pages
