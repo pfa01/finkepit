@@ -135,12 +135,13 @@ class ResultLogger:
         with open(log_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f, delimiter=';')
             writer.writerow([
-                'Input File', 'Message ID', 'Field Type', 'Alt Wert', 'Neuer Wert'
+                'Input File', 'Output File', 'Message ID', 'Field Type', 'Alt Wert', 'Neuer Wert'
             ])
             for r in self.results:
                 for mapping in r.mappings:
                     writer.writerow([
                         r.input_file,
+                        r.output_file,
                         r.message_id,
                         mapping.field_type,
                         mapping.original,
