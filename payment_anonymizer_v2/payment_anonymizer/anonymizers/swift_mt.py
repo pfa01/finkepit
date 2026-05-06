@@ -485,7 +485,6 @@ class SwiftMTAnonymizer(BaseAnonymizer):
             replace_block1,
             content
         )
-
         def replace_block2(match):
             return match.group(1) + replace_bic(match.group(2)) + match.group(3)
 
@@ -495,7 +494,7 @@ class SwiftMTAnonymizer(BaseAnonymizer):
             content,
             flags=re.DOTALL
         )
-
+        
         return content
 
     def _replace_all_bics(self, content: str) -> str:
