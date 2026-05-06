@@ -23,8 +23,12 @@ class ISO20022Anonymizer(BaseAnonymizer):
     """Anonymisierer für ISO 20022 XML-Nachrichten."""
 
     NAMESPACES = {
+        'camt052': 'urn:iso:std:iso:20022:tech:xsd:camt.052.001.08',
+        'camt053': 'urn:iso:std:iso:20022:tech:xsd:camt.053.001.08',
         'camt054': 'urn:iso:std:iso:20022:tech:xsd:camt.054.001.08',
-        'camt057': 'urn:iso:std:iso:20022:tech:xsd:camt.057.001.06',
+        'camt057': 'urn:iso:std:iso:20022:tech:xsd:camt.057.001.06',        
+        'pain001': 'urn:iso:std:iso:20022:tech:xsd:pain.001.001.09',
+        'pain009': 'urn:iso:std:iso:20022:tech:xsd:pain.009.001.07',
         'pacs002': 'urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10',
         'pacs008': 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08',
         'pacs009': 'urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08',
@@ -447,8 +451,6 @@ class ISO20022Anonymizer(BaseAnonymizer):
         # Alle BICFI / BIC Elemente im gesamten Dokument
         for bic_tag in ('BICFI', 'BIC'):
             for elem in root.xpath(f".//*[local-name()='{bic_tag}']"):
-                if id(elem) in processed_ids:
-                    continue
                 if not elem.text or not elem.text.strip():
                     continue
                 original = elem.text.strip()
@@ -466,8 +468,6 @@ class ISO20022Anonymizer(BaseAnonymizer):
         for sndg_inst in root.xpath(".//*[local-name()='SndgInst']"):
             ns = etree.QName(sndg_inst.tag).namespace or ''
             if 'BBkICF' not in ns and 'bulkpayment' not in ns.lower():
-                continue
-            if id(sndg_inst) in processed_ids:
                 continue
             if not sndg_inst.text or not sndg_inst.text.strip():
                 continue
