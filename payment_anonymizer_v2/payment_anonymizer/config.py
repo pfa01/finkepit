@@ -218,6 +218,20 @@ class Config:
         )
 
     # -------------------------------------------------------------------------
+    # Verhalten
+    # -------------------------------------------------------------------------
+
+    @property
+    def overwrite_existing(self) -> bool:
+        """Bestehende Output-Dateien ueberschreiben."""
+        return self.data.get('behavior', {}).get('overwrite_existing', False)
+
+    @property
+    def archive_after_processing(self) -> bool:
+        """Eingabedateien nach erfolgreicher Verarbeitung ins Archiv verschieben."""
+        return self.data.get('behavior', {}).get('archive_after_processing', False)
+
+    # -------------------------------------------------------------------------
     # Default-Entitaet
     # -------------------------------------------------------------------------
 
