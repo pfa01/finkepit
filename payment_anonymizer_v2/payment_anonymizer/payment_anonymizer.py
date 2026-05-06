@@ -82,9 +82,13 @@ class PaymentAnonymizer:
         if '<?xml' in content[:100] or '<Document' in content[:500]:
             return 'ISO20022'
 
-        # Präfix-Namespace z.B. <BBkICF:FIToFICstmrCdtTrf xmlns:BBkICF="urn:iso:std:iso:20022..."
-        # Kein Slice – ISO-Namespace kann tief in der Datei stehen (z.B. SEPA Bulk)
+        # Praefix-Namespace – ISO 20022 irgendwo im Dokument
+        # Erfasst SEPA Bulk (BBkICF), Standard und Swiss SIX-Nachrichten
         if re.search(r'urn:iso:std:iso:20022', content):
+            return 'ISO20022'
+
+        # Swiss SIX-Namespace (camt.019.001.07.ch.02 etc.)
+        if re.search(r'six-interbank-clearing[.]com', content):
             return 'ISO20022'
 
         # XML mit beliebigem Namespace-Präfix auf Root-Element
