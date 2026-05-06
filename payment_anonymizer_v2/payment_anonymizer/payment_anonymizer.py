@@ -262,8 +262,22 @@ class PaymentAnonymizer:
                 result.message_type = anonymizer._detect_message_type(content)
 
             else:
-                result.status        = 'SKIPPED'
-                result.error_message = 'Unbekannter Dateityp'
+                result.status        = 'ERROR'
+                result.error_message = 'Unbekannter Dateityp – Datei nicht verarbeitbar'
+                logger.error(
+                    "Unbekannter Dateityp: %s – wird ins error-Verzeichnis verschoben.",
+                    input_path
+                )
+                try:
+                    error_path        = self._move_to_error(
+                        input_path, result.error_message
+                    )
+                    result.error_file = str(error_path)
+                except Exception as move_err:
+                    logger.warning(
+                        "Datei konnte nicht ins error-Verzeichnis verschoben "
+                        "werden: %s – %s", input_path, move_err
+                    )
                 return result
 
             # ── Unterstützten Nachrichtentyp prüfen ──────────────────────
