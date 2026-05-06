@@ -161,21 +161,20 @@ class ISO20022Anonymizer(BaseAnonymizer):
         """
         Erkennt den Nachrichtentyp aus dem Namespace.
 
-        Unterstützte Namespace-Formate:
-        Standard:  urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08
-        SEPA Bulk: urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
-                                                   ^^^^
-                   Optionales Infix (sct:, cbpr:, fi: etc.) wird übersprungen.
+        Sucht nach dem ISO-20022-Nachrichtentyp-Muster: Buchstaben + Punkt
+        + genau 3 Ziffern (z.B. camt.019, pacs.008, pain.001).
+
+        Funktioniert fuer alle Namespace-Formate ohne Sonderbehandlung:
+          Standard:   urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
+          SEPA Bulk:  urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
+          Swiss SIX:  http://www.six-interbank-clearing.com/de/camt.019.001.07.ch.02
+
+        AppHdr (head:001.001.01) liefert keinen Match, da die Ziffernfolge
+        001 kein fuehrendes [a-z]+ hat.
         """
         if not namespace:
             return "UNKNOWN"
-        # Unterstuetzte Namespace-Formate:
-        # Standard:   urn:iso:std:iso:20022:tech:xsd:camt.019.001.07
-        # SEPA Bulk:  urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
-        # Swiss SIX:  http://www.six-interbank-clearing.com/de/camt.019.001.07.ch.02
-        match = re.search(
-            r'(?:xsd:|/de/)(?:[a-z]+:)?([a-z]+\.\d+)', namespace
-        )
+        match = re.search(r'([a-z]+\.\d{3})', namespace)
         if match:
             return match.group(1)
         return "UNKNOWN"
