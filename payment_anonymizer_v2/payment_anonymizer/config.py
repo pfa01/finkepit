@@ -186,6 +186,16 @@ class Config:
         return self.data['paths'].get('not_supported_path', 'not_supported/')
 
     @property
+    def archive_path(self) -> str:
+        """Zielverzeichnis fuer archivierte Eingabedateien."""
+        return self.data['paths'].get('archive_path', 'archive/')
+
+    @property
+    def error_path(self) -> str:
+        """Zielverzeichnis fuer Dateien die einen Verarbeitungsfehler verursacht haben."""
+        return self.data['paths'].get('error_path', 'error/')
+
+    @property
     def prefix(self) -> str:
         return self.data['file_handling']['prefix']
 
