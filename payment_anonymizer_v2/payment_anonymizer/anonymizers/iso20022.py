@@ -93,6 +93,31 @@ class ISO20022Anonymizer(BaseAnonymizer):
     # Namespace- / Nachrichtentyp-Erkennung
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _is_message_namespace(ns: str) -> bool:
+        """
+        Prueft ob ein Namespace ein ISO-20022-Nachrichtennamespace ist.
+
+        Gibt True zurueck fuer:
+          Standard:  urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
+          SEPA Bulk: urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
+          Swiss SIX: http://www.six-interbank-clearing.com/de/camt.019...
+
+        Gibt False zurueck fuer:
+          AppHdr:    urn:iso:std:iso:20022:tech:head:001.001.01  <- kein xsd:
+          SAA:       urn:swift:xsd:...                           <- kein iso:20022
+          BBkICF:    urn:BBkICF:xsd:...                         <- kein iso:20022
+        """
+        if not ns:
+            return False
+        # Swiss SIX: kein iso:20022, aber eigenes Erkennungsmerkmal
+        if 'six-interbank-clearing.com' in ns:
+            return True
+        # Standard und SEPA Bulk: iso:20022 + tech:xsd: (schließt head: aus)
+        if 'iso:std:iso:20022' in ns and 'tech:xsd:' in ns:
+            return True
+        return False
+
     def _detect_namespace(self, root: etree._Element) -> Optional[str]:
         """
         Erkennt den ISO-20022-Namespace der XML-Nachricht.
@@ -107,10 +132,10 @@ class ISO20022Anonymizer(BaseAnonymizer):
         """
         nsmap = root.nsmap
 
-        # 1. Default-Namespace (kein Präfix)
+        # 1. Default-Namespace (kein Praefix)
         if None in nsmap:
             ns = nsmap[None]
-            if ns and 'iso:std:iso:20022' in ns:
+            if self._is_message_namespace(ns):
                 return ns
 
         # 2. SAA DataPDU-Envelope
@@ -130,18 +155,16 @@ class ISO20022Anonymizer(BaseAnonymizer):
                         return hdr_ns
 
         # 3. Praefix-Namespace – alle deklarierten Namespaces pruefen
-        # Erfasst z.B. xmlns:BBkICF="urn:iso:std:iso:20022:..."
-        # sowie Swiss SIX-Nachrichten (six-interbank-clearing.com)
+        # Erfasst Standard, SEPA Bulk (BBkICF) und Swiss SIX.
+        # Schließt AppHdr (head:) und SAA-Namespaces aus.
         for ns in nsmap.values():
-            if ns and ('iso:std:iso:20022' in ns
-                       or 'six-interbank-clearing.com' in ns):
+            if self._is_message_namespace(ns):
                 return ns
 
         # 4. Namespace direkt aus dem QName des Root-Elements
         try:
             root_ns = etree.QName(root.tag).namespace
-            if root_ns and ('iso:std:iso:20022' in root_ns
-                            or 'six-interbank-clearing.com' in root_ns):
+            if self._is_message_namespace(root_ns):
                 return root_ns
         except Exception:
             pass
@@ -153,8 +176,7 @@ class ISO20022Anonymizer(BaseAnonymizer):
             if i >= 200:
                 break
             for ns in (elem.nsmap or {}).values():
-                if ns and ('iso:std:iso:20022' in ns
-                           or 'six-interbank-clearing.com' in ns):
+                if self._is_message_namespace(ns):
                     logger.debug(
                         "ISO-20022-Namespace in Kind-Element %d gefunden: %s",
                         i, ns
