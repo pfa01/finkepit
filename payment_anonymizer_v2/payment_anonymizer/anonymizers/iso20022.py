@@ -506,65 +506,69 @@ class ISO20022Anonymizer(BaseAnonymizer):
 
         count = 0
 
-        for sender in root.xpath(".//*[local-name()='Sender']"):
-
-            # Saa:X1 - direkter BIC-Wert
-            for x1 in sender.xpath(".//*[local-name()='X1']"):
-                if id(x1) in processed_ids:
+        # Alle Saa:X1-Elemente im Dokument – unabhaengig vom Eltern-Element.
+        # Erfasst Saa:Sender/X1, Saa:FullName/X1, Saa:From/X1, Saa:To/X1 etc.
+        for x1 in root.xpath(".//*[local-name()='X1']"):
+            if id(x1) in processed_ids:
+                continue
+            if not x1.text or not x1.text.strip():
+                continue
+            original  = x1.text.strip()
+            bic_upper = original.upper()
+            for mapping in replacements:
+                from_bic = mapping.get('from', '').upper()
+                to_bic   = mapping.get('to', '')
+                if not from_bic or not to_bic:
                     continue
-                if not x1.text or not x1.text.strip():
-                    continue
-                original  = x1.text.strip()
-                bic_upper = original.upper()
-                for mapping in replacements:
-                    from_bic = mapping.get('from', '').upper()
-                    to_bic   = mapping.get('to', '')
-                    if not from_bic or not to_bic:
-                        continue
-                    if bic_upper[:8] == from_bic[:8]:
-                        branch  = bic_upper[8:] if len(bic_upper) > 8 else ''
-                        new_bic = to_bic[:8] + branch
-                        logger.debug(
-                            "[SAA_X1] alt wert=%s   neuer wert=%s",
-                            original, new_bic
-                        )
-                        x1.text = new_bic
-                        processed_ids.add(id(x1))
-                        count += 1
-                        break
-
-            # Saa:DN - BIC als Teilstring im Distinguished Name
-            # Format: ou=xxx,o=banklull,o=swift
-            for dn in sender.xpath(".//*[local-name()='DN']"):
-                if id(dn) in processed_ids:
-                    continue
-                if not dn.text or not dn.text.strip():
-                    continue
-                original = dn.text
-                modified = original
-                for mapping in replacements:
-                    from_bic    = mapping.get('from', '').lower()
-                    to_bic      = mapping.get('to', '').lower()
-                    if not from_bic or not to_bic:
-                        continue
-                    from_prefix = from_bic[:8]
-                    to_prefix   = to_bic[:8]
-                    pattern = re.compile(
-                        rf'(o=){re.escape(from_prefix)}', re.IGNORECASE
+                if bic_upper[:8] == from_bic[:8]:
+                    branch  = bic_upper[8:] if len(bic_upper) > 8 else ''
+                    new_bic = to_bic[:8] + branch
+                    parent_name = (
+                        etree.QName(x1.getparent().tag).localname
+                        if x1.getparent() is not None else '?'
                     )
-                    if pattern.search(modified):
-                        modified = pattern.sub(
-                            lambda m: m.group(1) + to_prefix, modified
-                        )
-                        logger.debug(
-                            "[SAA_DN] alt wert=%s   neuer wert=%s",
-                            original.strip(), modified.strip()
-                        )
-
-                if modified != original:
-                    dn.text = modified
-                    processed_ids.add(id(dn))
+                    logger.debug(
+                        "[SAA_X1] parent=<%s>  alt wert=%s   neuer wert=%s",
+                        parent_name, original, new_bic
+                    )
+                    x1.text = new_bic
+                    processed_ids.add(id(x1))
                     count += 1
+                    break
+
+        # Alle Saa:DN-Elemente im Dokument – unabhaengig vom Eltern-Element.
+        # Erfasst Saa:Sender/DN, Saa:FullName/DN, Saa:From/DN etc.
+        for dn in root.xpath(".//*[local-name()='DN']"):
+            if id(dn) in processed_ids:
+                continue
+            if not dn.text or not dn.text.strip():
+                continue
+            original = dn.text
+            modified = original
+            for mapping in replacements:
+                from_bic = mapping.get('from', '').lower()
+                to_bic   = mapping.get('to', '').lower()
+                if not from_bic or not to_bic:
+                    continue
+                pattern = re.compile(
+                    rf'(o=){re.escape(from_bic[:8])}', re.IGNORECASE
+                )
+                if pattern.search(modified):
+                    modified = pattern.sub(
+                        lambda m: m.group(1) + to_bic[:8], modified
+                    )
+                    parent_name = (
+                        etree.QName(dn.getparent().tag).localname
+                        if dn.getparent() is not None else '?'
+                    )
+                    logger.debug(
+                        "[SAA_DN] parent=<%s>  alt wert=%s   neuer wert=%s",
+                        parent_name, original.strip(), modified.strip()
+                    )
+            if modified != original:
+                dn.text = modified
+                processed_ids.add(id(dn))
+                count += 1
 
         return count
 
