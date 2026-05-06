@@ -101,10 +101,17 @@ class PaymentAnonymizer:
 
     def _get_output_filename(self, input_path: Path) -> Path:
         """Generiert den Output-Dateinamen."""
+        
+        now         = datetime.now()
+        datestamp   = now.strftime('%Y%m%d')
+        timestamp   = now.strftime('%H%M%S')
+
+        
         output_dir = Path(self.config.output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
         new_name = (
             f"{self.config.prefix}"
+            f"{datestamp}_{timestamp}_"
             f"{input_path.stem}"
             f"{self.config.suffix}"
             f"{input_path.suffix}"
@@ -135,23 +142,12 @@ class PaymentAnonymizer:
         Kopiert eine nicht unterstützte Datei in den not_supported_path.
         Die Originaldatei im Input-Verzeichnis bleibt erhalten.
         """
-        target_dir = Path(self.config.not_supported_path)
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        target_path = target_dir / input_path.name
-        if target_path.exists():
-            counter = 1
-            while target_path.exists():
-                target_path = target_dir / (
-                    f"{input_path.stem}_{counter}{input_path.suffix}"
-                )
-                counter += 1
-
-        shutil.copy2(input_path, target_path)
+        target_path = self._build_archive_target(input_path, Path(self.config.not_supported_path))
+        
+        shutil.move(str(input_path), str(target_path))
         logger.info(
-            "Nicht unterstützter Nachrichtentyp – kopiert nach: %s "
-            "(Original bleibt in: %s)",
-            target_path, input_path
+            "Nicht unterstützter Nachrichtentyp – verschoben nach: %s ", 
+            target_path
         )
         return target_path
 
@@ -163,24 +159,47 @@ class PaymentAnonymizer:
         wird eine laufende Nummer angehängt.
         Wird nur aufgerufen wenn archive_after_processing: true.
         """
-        target_dir = Path(self.config.archive_path)
+        target_path = self._build_archive_target(input_path, Path(self.config.archive_path))
+        input_path.rename(target_path)
+        logger.info(
+            "Archiviert: %s -> %s", 
+            input_path, 
+            target_path
+        )
+
+        return target_path
+
+    def _build_archive_target(self, input_path: Path, base_dir: Path) -> Path:
+        """
+        Generiert Zielpfad für Archiv- und Not-Supported Dateien
+
+        Beispiel:
+        archive/20260504/140322_pacs008.xml
+        not_supported/20260504/140322_pacs008.xml
+        """
+
+        now         = datetime.now()
+        date_dir    = now.strftime('%Y%m%d')
+        timestamp   = now.strftime('%H%M%S_%f')[:9]
+
+        target_dir = base_dir / date_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        target_path = target_dir / input_path.name
+        new_name    = f"{date_dir}_{timestamp}_{input_path.name}"
+        target_path = target_dir / new_name
+
         if target_path.exists():
             counter = 1
             while target_path.exists():
-                target_path = target_dir / (
-                    f"{input_path.stem}_{counter}{input_path.suffix}"
+                new_name = (
+                    f"{timestamp}_{input_path.stem}" 
+                    f"_{counter}{input_path.suffix}"
                 )
+                target_path = target_dir / new_name
                 counter += 1
 
-        input_path.rename(target_path)
-        logger.info(
-            "Archiviert: %s → %s",
-            input_path, target_path
-        )
-        return target_path
+        return target_path    
+                        
 
     # -------------------------------------------------------------------------
     # Einzeldatei verarbeiten
@@ -273,7 +292,8 @@ class PaymentAnonymizer:
 
             # ── Eingabedatei archivieren wenn konfiguriert ────────────────
             if self.config.archive_after_processing:
-                self._archive_input_file(input_path)
+                archived_path = self._archive_input_file(input_path)
+                result.archive_file = str(archived_path)                
 
         except Exception as e:
             result.status        = 'ERROR'
