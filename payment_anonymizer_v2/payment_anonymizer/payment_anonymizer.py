@@ -288,7 +288,7 @@ class PaymentAnonymizer:
                 result.validation_status = 'VALID' if is_valid else 'INVALID'
                 result.validation_errors = errors
 
-            if not self.config.data.get('behavior', {}).get('overwrite_existing', False):
+            if not self.config.overwrite_existing:
                 counter = 1
                 while output_path.exists():
                     new_name = (
