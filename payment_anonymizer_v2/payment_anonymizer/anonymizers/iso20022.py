@@ -93,92 +93,59 @@ class ISO20022Anonymizer(BaseAnonymizer):
     # Namespace- / Nachrichtentyp-Erkennung
     # -------------------------------------------------------------------------
 
-    @staticmethod
-    def _is_message_namespace(ns: str) -> bool:
-        """
-        Prueft ob ein Namespace ein ISO-20022-Nachrichtennamespace ist.
-
-        Gibt True zurueck fuer:
-          Standard:  urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
-          SEPA Bulk: urn:iso:std:iso:20022:tech:xsd:sct:pacs.008.001.08
-          Swiss SIX: http://www.six-interbank-clearing.com/de/camt.019...
-
-        Gibt False zurueck fuer:
-          AppHdr:    urn:iso:std:iso:20022:tech:head:001.001.01  <- kein xsd:
-          SAA:       urn:swift:xsd:...                           <- kein iso:20022
-          BBkICF:    urn:BBkICF:xsd:...                         <- kein iso:20022
-        """
-        if not ns:
-            return False
-        # Swiss SIX: kein iso:20022, aber eigenes Erkennungsmerkmal
-        if 'six-interbank-clearing.com' in ns:
-            return True
-        # Standard und SEPA Bulk: iso:20022 + tech:xsd: (schließt head: aus)
-        if 'iso:std:iso:20022' in ns and 'tech:xsd:' in ns:
-            return True
-        return False
-
     def _detect_namespace(self, root: etree._Element) -> Optional[str]:
         """
-        Erkennt den ISO-20022-Namespace der XML-Nachricht.
+        Erkennt den ISO-20022-Namespace anhand des <Document>-Tags.
 
-        Unterstützte Strukturen:
-        1. Default-Namespace:  xmlns="urn:iso:std:iso:20022:..."
-        2. DataPDU-Envelope:   SAA-Wrapper mit Document/AppHdr innen
-        3. Präfix-Namespace:   xmlns:BBkICF="urn:iso:std:iso:20022:..."
-           z.B. SEPA-Bulk:    <BBkICF:FIToFICstmrCdtTrf xmlns:BBkICF="...">
-        4. Namespace im QName: Root-Tag enthält URI direkt als {ns}local
-        5. Tiefere Elemente:   Namespace in Kind-Elementen deklariert
+        Strategie: direkt nach dem <Document>-Element suchen und dessen
+        Namespace zurueckgeben. Das ist die zuverlaessigste Methode, da
+        alle ISO-20022-Nachrichten den Nachrichtentyp-Namespace auf dem
+        <Document>-Element deklarieren – unabhaengig von umgebenden
+        Wrapper-Elementen (SAA DataPDU, BBkICF Bulk, AppHdr etc.).
+
+        Fallback fuer Nachrichten ohne <Document>-Element:
+        Alle Kind-Elemente werden nach einem Namespace durchsucht der
+        einen bekannten Nachrichtentyp enthaelt (xsd: oder Swiss SIX).
         """
-        nsmap = root.nsmap
+        # Direkt nach <Document>-Element suchen (max. 200 Elemente)
+        # Deckt alle Strukturen ab:
+        #   Standard:   <Document xmlns="...xsd:camt.053...">
+        #   SAA:        <DataPDU><Body><Document xmlns="...xsd:camt.053...">
+        #   BBkICF:     <BBkICF:BBkICFBlkCdtTrf>...<Document xmlns="...xsd:pacs.008...">
+        for i, elem in enumerate(root.iter()):
+            if i >= 200:
+                break
+            local = etree.QName(elem.tag).localname
+            if local == 'Document':
+                # Default-Namespace des Document-Elements zurueckgeben
+                ns = elem.nsmap.get(None) or etree.QName(elem.tag).namespace
+                if ns:
+                    logger.debug(
+                        "Namespace via <Document>-Element gefunden "
+                        "(Element %d): %s", i, ns
+                    )
+                    return ns
 
-        # 1. Default-Namespace (kein Praefix)
-        if None in nsmap:
-            ns = nsmap[None]
-            if self._is_message_namespace(ns):
-                return ns
-
-        # 2. SAA DataPDU-Envelope
-        root_local = etree.QName(root.tag).localname
-        if root_local == 'DataPDU':
-            for elem in root.iter():
-                local_name = etree.QName(elem.tag).localname
-                if local_name == 'Document':
-                    doc_ns = elem.nsmap.get(None)
-                    if doc_ns and 'iso:std:iso:20022' in doc_ns:
-                        return doc_ns
-            for elem in root.iter():
-                local_name = etree.QName(elem.tag).localname
-                if local_name == 'AppHdr':
-                    hdr_ns = elem.nsmap.get(None)
-                    if hdr_ns and 'iso:std:iso:20022' in hdr_ns:
-                        return hdr_ns
-
-        # 3. Praefix-Namespace – alle deklarierten Namespaces pruefen
-        # Erfasst Standard, SEPA Bulk (BBkICF) und Swiss SIX.
-        # Schließt AppHdr (head:) und SAA-Namespaces aus.
-        for ns in nsmap.values():
-            if self._is_message_namespace(ns):
-                return ns
-
-        # 4. Namespace direkt aus dem QName des Root-Elements
-        try:
-            root_ns = etree.QName(root.tag).namespace
-            if self._is_message_namespace(root_ns):
-                return root_ns
-        except Exception:
-            pass
-
-        # 5. Fallback: in Kind-Elementen suchen (max. 200 Elemente)
-        # Noetig fuer SEPA Bulk (BBkICF-Wrapper) wo der ISO-Namespace
-        # erst auf einem tiefer liegenden Element deklariert ist.
+        # Fallback: Nachrichten ohne <Document>-Wrapper
+        # z.B. Swiss SIX camt.019 mit <GetCcltnStsReq> als Root
+        # oder SEPA Bulk wo FIToFICstmrCdtTrf den Namespace traegt
+        logger.debug(
+            "Kein <Document>-Element gefunden – "
+            "suche Namespace in Kind-Elementen (Fallback)."
+        )
         for i, elem in enumerate(root.iter()):
             if i >= 200:
                 break
             for ns in (elem.nsmap or {}).values():
-                if self._is_message_namespace(ns):
+                if not ns:
+                    continue
+                # Akzeptiere nur Nachrichten-Namespaces:
+                # Standard/SEPA Bulk: muss xsd: enthalten (schließt head: aus)
+                # Swiss SIX:          six-interbank-clearing.com
+                if ('tech:xsd:' in ns or
+                        'six-interbank-clearing.com' in ns):
                     logger.debug(
-                        "ISO-20022-Namespace in Kind-Element %d gefunden: %s",
+                        "Namespace via Fallback in Element %d gefunden: %s",
                         i, ns
                     )
                     return ns
