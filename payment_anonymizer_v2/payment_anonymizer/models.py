@@ -34,3 +34,4 @@ class AnonymizationResult:
     message_id: str = ""
     # Alle Ersetzungen dieser Datei (befüllt nach erfolgreicher Anonymisierung)
     mappings: List[FieldMapping] = field(default_factory=list)
+    archive_file: str = '' # Pfad der archivierten Datei
