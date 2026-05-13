@@ -89,6 +89,23 @@ class Config:
         """Steuert ob das :86:-Feld in MT940/942/950 anonymisiert wird."""
         return self.data.get('anonymization', {}).get('anonymize_mt_field_86', True)
 
+    @property
+    def anonymize_instruction_fields(self) -> bool:
+        """
+        InstrInf-Felder (InstrForCdtrAgt, InstrForNxtAgt, InstrForDbtrAgt),
+        StsRsnInf/AddtlInf sowie Nrtv-Felder anonymisieren.
+        """
+        return self.data.get('anonymization', {}).get(
+            'anonymize_instruction_fields', True
+        )
+
+    @property
+    def anonymize_regulatory_reporting(self) -> bool:
+        """RgltryRptg/Dtls/Inf – Freitext im regulatorischen Reporting."""
+        return self.data.get('anonymization', {}).get(
+            'anonymize_regulatory_reporting', True
+        )
+
     # -------------------------------------------------------------------------
     # Header-Modifikation
     # -------------------------------------------------------------------------
