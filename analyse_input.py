@@ -601,9 +601,12 @@ def analyse_account_connections(source_dir: Path) -> list:
         names = _dedupe_tagged(accounts['names'])
         error = accounts['error'] or msg_info.get('error', '')
 
-        # BICs nach Kategorie aufteilen (via ROLE_CATEGORY-Mapping)
-        auftr_bics = []
-        empf_bics  = []
+        # BICs und IBANs nach Kategorie aufteilen (via ROLE_CATEGORY-Mapping)
+        auftr_bics  = []
+        empf_bics   = []
+        auftr_ibans = []
+        empf_ibans  = []
+
         for role, bic in accounts['bics']:
             cat = ROLE_CATEGORY.get(role)
             bic = bic.strip()
@@ -612,26 +615,37 @@ def analyse_account_connections(source_dir: Path) -> list:
             elif cat == 'Empfaenger' and bic not in empf_bics:
                 empf_bics.append(bic)
 
+        for role, iban in accounts['ibans']:
+            cat  = ROLE_CATEGORY.get(role)
+            iban = iban.strip()
+            if cat == 'Auftraggeber' and iban not in auftr_ibans:
+                auftr_ibans.append(iban)
+            elif cat == 'Empfaenger' and iban not in empf_ibans:
+                empf_ibans.append(iban)
+
         rows.append({
-            'Dateipfad':        str(file_path),
-            'Dateiname':        file_path.name,
-            'Nachrichtentyp':   msg_info.get('message_type', ''),
-            'IBANs':            ibans,
-            'BICs':             bics,
-            'Namen':            names,
-            'Auftraggeber_BIC': ', '.join(auftr_bics),
-            'Empfaenger_BIC':   ', '.join(empf_bics),
-            'Groesse_KB':       size_kb,
-            'Fehler':           error,
+            'Dateipfad':         str(file_path),
+            'Dateiname':         file_path.name,
+            'Nachrichtentyp':    msg_info.get('message_type', ''),
+            'IBANs':             ibans,
+            'BICs':              bics,
+            'Namen':             names,
+            'Auftraggeber_BIC':  ', '.join(auftr_bics),
+            'Auftraggeber_IBAN': ', '.join(auftr_ibans),
+            'Empfaenger_BIC':    ', '.join(empf_bics),
+            'Empfaenger_IBAN':   ', '.join(empf_ibans),
+            'Groesse_KB':        size_kb,
+            'Fehler':            error,
         })
         logger.info(
-            "  %-35s  %-12s  IBANs:%-3d  BICs:%-3d  Auftr:%s  Empf:%s%s",
+            "  %-35s  %-12s  "
+            "Auftr-BIC:%s  Auftr-IBAN:%s  Empf-BIC:%s  Empf-IBAN:%s%s",
             file_path.name,
             msg_info.get('message_type', '?'),
-            len(accounts['ibans']),
-            len(accounts['bics']),
-            ', '.join(auftr_bics) or '-',
-            ', '.join(empf_bics)  or '-',
+            ', '.join(auftr_bics)  or '-',
+            ', '.join(auftr_ibans) or '-',
+            ', '.join(empf_bics)   or '-',
+            ', '.join(empf_ibans)  or '-',
             f"  FEHLER: {error[:30]}" if error else ''
         )
     return rows
@@ -645,7 +659,8 @@ def write_account_csv(rows: list, output_dir: Path) -> Path:
     fieldnames = [
         'Dateipfad', 'Dateiname', 'Nachrichtentyp',
         'IBANs', 'BICs', 'Namen',
-        'Auftraggeber_BIC', 'Empfaenger_BIC',
+        'Auftraggeber_BIC', 'Auftraggeber_IBAN',
+        'Empfaenger_BIC',   'Empfaenger_IBAN',
         'Groesse_KB', 'Fehler'
     ]
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
