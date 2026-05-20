@@ -17,7 +17,7 @@ import argparse
 import sys
 
 from payment_anonymizer.config import Config
-from payment_anonymizer import PaymentAnonymizer
+from payment_anonymizer.payment_anonymizer import PaymentAnonymizer
 
 
 def main():
