@@ -398,8 +398,17 @@ ROLE_CATEGORY = {
     'Empfaengerbank':     'Empfaenger',
     'KorrBank-Empf':      'Empfaenger',
 
-    # Nicht zugeordnet (werden nicht in Auftraggeber/Empfaenger-Spalten aufgenommen)
-    # IntrmyAgt*, Intermediary, Zahlung, Beteiligter → landen nur in BICs/IBANs/Namen
+    # Intermediary
+    'IntrmyAgt1':     'Intermediary',
+    'IntrmyAgt2':     'Intermediary',
+    'IntrmyAgt3':     'Intermediary',
+    'IntrmyAgt1Acct': 'Intermediary',
+    'IntrmyAgt2Acct': 'Intermediary',
+    'IntrmyAgt3Acct': 'Intermediary',
+    'Intermediary':   'Intermediary',
+    'Zahlung':        'Intermediary',
+    # Nicht zugeordnet → landen nur in BICs/IBANs/Namen
+    # Beteiligter → keine Kategorie
 }
 
 
@@ -606,6 +615,8 @@ def analyse_account_connections(source_dir: Path) -> list:
         empf_bics   = []
         auftr_ibans = []
         empf_ibans  = []
+        intr_bics   = []
+        intr_ibans  = []
 
         for role, bic in accounts['bics']:
             cat = ROLE_CATEGORY.get(role)
@@ -614,6 +625,8 @@ def analyse_account_connections(source_dir: Path) -> list:
                 auftr_bics.append(bic)
             elif cat == 'Empfaenger' and bic not in empf_bics:
                 empf_bics.append(bic)
+            elif cat == 'Intermediary' and bic not in intr_bics:
+                intr_bics.append(bic)
 
         for role, iban in accounts['ibans']:
             cat  = ROLE_CATEGORY.get(role)
@@ -622,6 +635,8 @@ def analyse_account_connections(source_dir: Path) -> list:
                 auftr_ibans.append(iban)
             elif cat == 'Empfaenger' and iban not in empf_ibans:
                 empf_ibans.append(iban)
+            elif cat == 'Intermediary' and iban not in intr_ibans:
+                intr_ibans.append(iban)
 
         rows.append({
             'Dateipfad':         str(file_path),
@@ -634,18 +649,24 @@ def analyse_account_connections(source_dir: Path) -> list:
             'Auftraggeber_IBAN': ', '.join(auftr_ibans),
             'Empfaenger_BIC':    ', '.join(empf_bics),
             'Empfaenger_IBAN':   ', '.join(empf_ibans),
+            'Intermediar_BIC':   ', '.join(intr_bics),
+            'Intermediar_IBAN':  ', '.join(intr_ibans),
             'Groesse_KB':        size_kb,
             'Fehler':            error,
         })
         logger.info(
             "  %-35s  %-12s  "
-            "Auftr-BIC:%s  Auftr-IBAN:%s  Empf-BIC:%s  Empf-IBAN:%s%s",
+            "Auftr-BIC:%s  Auftr-IBAN:%s  "
+            "Empf-BIC:%s  Empf-IBAN:%s  "
+            "Intr-BIC:%s  Intr-IBAN:%s%s",
             file_path.name,
             msg_info.get('message_type', '?'),
             ', '.join(auftr_bics)  or '-',
             ', '.join(auftr_ibans) or '-',
             ', '.join(empf_bics)   or '-',
             ', '.join(empf_ibans)  or '-',
+            ', '.join(intr_bics)   or '-',
+            ', '.join(intr_ibans)  or '-',
             f"  FEHLER: {error[:30]}" if error else ''
         )
     return rows
@@ -661,6 +682,7 @@ def write_account_csv(rows: list, output_dir: Path) -> Path:
         'IBANs', 'BICs', 'Namen',
         'Auftraggeber_BIC', 'Auftraggeber_IBAN',
         'Empfaenger_BIC',   'Empfaenger_IBAN',
+        'Intermediar_BIC',  'Intermediar_IBAN',
         'Groesse_KB', 'Fehler'
     ]
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
