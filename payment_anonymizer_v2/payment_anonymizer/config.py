@@ -20,6 +20,7 @@ class Config:
 
     def __init__(self, config_path: str):
         self.config_path = Path(config_path)
+        self._config_dir = Path(config_path).resolve().parent
         self.data = self._load_config()
         self._validate_default()
         self._person_index    = 0
@@ -249,6 +250,9 @@ class Config:
         if not csv_path:
             return set()
         p = Path(csv_path)
+        # Relativer Pfad → relativ zum Projektverzeichnis (Ort der config.json)
+        if not p.is_absolute():
+            p = self._config_dir / csv_path
         if not p.exists():
             log.warning(
                 "IBAN-Referenz-CSV nicht gefunden: %s – Routing deaktiviert.", p
