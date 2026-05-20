@@ -4,7 +4,6 @@
 main.py
 =======
 CLI-Einstiegspunkt für den Payment Message Anonymizer.
-
 Verwendung
 ----------
   python main.py                              # Ganzes Input-Verzeichnis
@@ -14,10 +13,10 @@ Verwendung
   python main.py -f "input/*.xml,input/*.fin" # Mehrere Muster
   python main.py -f "input/**/*.xml"          # Rekursiv
 """
-
 import argparse
 import sys
 
+from config import Config
 from payment_anonymizer import PaymentAnonymizer
 
 
@@ -33,27 +32,20 @@ def main():
 Beispiele:
   python main.py
       Verarbeitet alle Dateien im konfigurierten Input-Verzeichnis.
-
   python main.py -c custom_config.json
       Verwendet eine eigene Konfigurationsdatei.
-
   python main.py -f input/pacs.008.xml
       Verarbeitet eine einzelne Datei.
-
   python main.py -f "input/pacs.*.xml"
       Verarbeitet alle pacs-Dateien im input-Verzeichnis (Wildcard).
-
   python main.py -f "input/*.xml,input/*.fin"
       Mehrere Muster kommagetrennt.
-
   python main.py -f "input/**/*.xml"
       Alle XML-Dateien rekursiv in Unterverzeichnissen.
-
   python main.py -v
       Ausführliche Fehlerausgabe (Stacktrace).
         """
     )
-
     parser.add_argument(
         '-c', '--config',
         default='config.json',
@@ -75,11 +67,11 @@ Beispiele:
         action='store_true',
         help='Ausführliche Ausgabe bei Fehlern (Stacktrace)'
     )
-
     args = parser.parse_args()
 
     try:
-        anonymizer = PaymentAnonymizer(args.config)
+        config     = Config(args.config)
+        anonymizer = PaymentAnonymizer(config)
 
         if args.file:
             results = anonymizer.process_files(args.file)
