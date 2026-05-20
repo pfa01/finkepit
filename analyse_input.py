@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 analyse_input.py
@@ -18,9 +18,19 @@ Dieses Skript erledigt zwei Aufgaben:
    Ergebnis: analyse_JJJJMMTT_HHMMSS.csv im aktuellen Verzeichnis.
 
 Aufruf:
-    python analyse_input.py
-    python analyse_input.py --input-dir pfad/zu/input
-    python analyse_input.py --output-dir pfad/zu/logs
+    # Nur verschieben
+    python analyse_input.py --remove-files
+
+    # Nur analysieren
+    python analyse_input.py --analyse-files
+
+    # Beides – zuerst verschieben, dann analysieren
+    python analyse_input.py --remove-files --analyse-files
+
+    # Mit abweichenden Pfaden
+    python analyse_input.py --remove-files --analyse-files \
+        --input-dir pfad/zu/input \
+        --output-dir pfad/zu/logs
 """
 
 import argparse
@@ -80,13 +90,18 @@ def _resolve_conflict(target: Path) -> Path:
 
 # ── Teil 1: Dateien verschieben ───────────────────────────────────────────────
 
-def move_massentest_files(input_dir: Path) -> int:
+def move_massentest_files(input_dir: Path,
+                          subdir: str = MASSENTEST_SUBDIR) -> int:
     """
     Verschiebt alle Dateien aus input_dir/Massentest rekursiv nach input_dir.
-    Löscht den Massentest-Ordner anschließend.
+
+    Die Ordnerstruktur unterhalb von Massentest wird aufgeloest – alle
+    Dateien landen direkt in input/, unabhaengig von ihrer urspruenglichen
+    Unterordner-Tiefe. Bei Namenskonflikt erhaelt die Datei einen Timestamp-Suffix.
+    Löscht den Massentest-Ordner anschließend vollständig.
     Gibt die Anzahl verschobener Dateien zurück.
     """
-    massentest_dir = input_dir / MASSENTEST_SUBDIR
+    massentest_dir = input_dir / subdir
 
     if not massentest_dir.exists():
         logger.info("Ordner '%s' nicht vorhanden – nichts zu verschieben.",
@@ -309,23 +324,100 @@ def write_csv(rows: list, output_dir: Path) -> Path:
 
 # ── Hauptprogramm ─────────────────────────────────────────────────────────────
 
+def _print_summary(rows: list, csv_path: Path = None):
+    """Gibt eine Zusammenfassung der Analyseergebnisse aus."""
+    types  = {}
+    errors = 0
+    for r in rows:
+        mt = r['Nachrichtentyp'] or 'unbekannt'
+        types[mt] = types.get(mt, 0) + 1
+        if r['Fehler']:
+            errors += 1
+
+    print()
+    print('=' * 60)
+    print(f"  Dateien analysiert:  {len(rows)}")
+    print(f"  Fehler:              {errors}")
+    print(f"  Nachrichtentypen:")
+    for mt, cnt in sorted(types.items()):
+        print(f"    {mt:<20} {cnt:>4}x")
+    if csv_path:
+        print(f"  CSV: {csv_path}")
+    print('=' * 60)
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Massentest-Dateien verschieben und Input-Ordner analysieren.'
+        description=(
+            'Werkzeug zum Verschieben und Analysieren von Zahlungsnachrichten.\n'
+            '\n'
+            'Die beiden Funktionen lassen sich unabhängig voneinander aufrufen:\n'
+            '  --remove-files     Dateien aus input/Massentest nach input/ verschieben\n'
+            '  --analyse-files  Alle Dateien in input/ analysieren und CSV erzeugen\n'
+            '\n'
+            'Werden beide Flags angegeben, wird zuerst verschoben, dann analysiert.'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
+
+    # ── Hauptaktionen ────────────────────────────────────────────────────
+    action_group = parser.add_argument_group('Aktionen (mindestens eine angeben)')
+    action_group.add_argument(
+        '--remove-files',
+        action='store_true',
+        help=(
+            'Alle Dateien aus input/Massentest rekursiv nach input/ verschieben. '
+            'Die Unterordnerstruktur wird aufgelöst – alle Dateien landen '
+            'direkt in input/, egal wie tief sie lagen. '
+            'Bei Namenskonflikt erhält die Datei einen Timestamp-Suffix. '
+            'Massentest-Ordner wird anschließend vollständig gelöscht.'
+        )
+    )
+    action_group.add_argument(
+        '--analyse-files',
+        action='store_true',
+        help=(
+            'Alle .xml-, .txt- und .fin-Dateien in input/ analysieren. '
+            'Für XML-Dateien wird der Namespace aus dem <Document>-Tag gelesen, '
+            'für SWIFT-MT-Dateien der Typ aus dem {2:}-Block. '
+            'Ergebnis: analyse_JJJJMMTT_HHMMSS.csv im Output-Verzeichnis.'
+        )
+    )
+
+    # ── Pfade ────────────────────────────────────────────────────────────
+    path_group = parser.add_argument_group('Pfade')
+    path_group.add_argument(
         '--input-dir',
         type=Path,
         default=DEFAULT_INPUT_DIR,
+        metavar='PFAD',
         help=f'Pfad zum Input-Ordner (Standard: {DEFAULT_INPUT_DIR})'
     )
-    parser.add_argument(
+    path_group.add_argument(
         '--output-dir',
         type=Path,
         default=None,
+        metavar='PFAD',
         help='Zielordner für die CSV-Datei (Standard: aktuelles Verzeichnis)'
     )
+    path_group.add_argument(
+        '--massentest-dir',
+        type=str,
+        default=MASSENTEST_SUBDIR,
+        metavar='NAME',
+        help=f'Name des Quell-Unterordners (Standard: {MASSENTEST_SUBDIR})'
+    )
+
     args = parser.parse_args()
+
+    # Mindestens eine Aktion muss angegeben sein
+    if not args.remove_files and not args.analyse_files:
+        parser.print_help()
+        print()
+        print('Fehler: Bitte mindestens eine Aktion angeben '
+              '(--remove-files und/oder --analyse-files).')
+        sys.exit(1)
 
     input_dir  = args.input_dir
     output_dir = args.output_dir or Path('.')
@@ -334,48 +426,36 @@ def main():
         logger.error("Input-Ordner nicht gefunden: %s", input_dir)
         sys.exit(1)
 
-    print()
-    print('=' * 60)
-    print('  SCHRITT 1: Dateien aus Massentest verschieben')
-    print('=' * 60)
-    moved = move_massentest_files(input_dir)
-    logger.info("%d Datei(en) verschoben.", moved)
+    # ── Aktion 1: Verschieben ─────────────────────────────────────────────
+    if args.remove_files:
+        print()
+        print('=' * 60)
+        print('  DATEIEN VERSCHIEBEN  (--remove-files)')
+        print('=' * 60)
 
-    print()
-    print('=' * 60)
-    print('  SCHRITT 2: Dateien im Input-Ordner analysieren')
-    print('=' * 60)
-    rows = analyse_files(input_dir)
+        moved = move_massentest_files(input_dir, args.massentest_dir)
+        logger.info("%d Datei(en) erfolgreich verschoben.", moved)
 
-    if not rows:
-        logger.info("Keine Dateien zum Analysieren gefunden.")
-        return
+    # ── Aktion 2: Analysieren ─────────────────────────────────────────────
+    if args.analyse_files:
+        print()
+        print('=' * 60)
+        print('  DATEIEN ANALYSIEREN  (--analyse-files)')
+        print('=' * 60)
 
-    print()
-    print('=' * 60)
-    print('  SCHRITT 3: CSV schreiben')
-    print('=' * 60)
-    csv_path = write_csv(rows, output_dir)
+        rows = analyse_files(input_dir)
 
-    # Kurze Zusammenfassung
-    print()
-    print('=' * 60)
-    types = {}
-    errors = 0
-    for r in rows:
-        mt = r['Nachrichtentyp'] or 'unbekannt'
-        types[mt] = types.get(mt, 0) + 1
-        if r['Fehler']:
-            errors += 1
+        if not rows:
+            logger.info("Keine Dateien mit bekannter Endung in '%s'.", input_dir)
+            return
 
-    print(f"  Dateien analysiert:  {len(rows)}")
-    print(f"  Fehler:              {errors}")
-    print(f"  Nachrichtentypen:")
-    for mt, cnt in sorted(types.items()):
-        print(f"    {mt:<20} {cnt:>4}x")
-    print(f"  CSV: {csv_path}")
-    print('=' * 60)
-    print()
+        print()
+        print('=' * 60)
+        print('  CSV SCHREIBEN')
+        print('=' * 60)
+
+        csv_path = write_csv(rows, output_dir)
+        _print_summary(rows, csv_path)
 
 
 if __name__ == '__main__':
