@@ -270,22 +270,40 @@ class PaymentAnonymizer:
         (leere Referenzliste), wird output_path unveraendert zurueckgegeben.
         """
         ref_ibans = self.reference_ibans
+
         if not ref_ibans:
+            logger.warning(
+                "IBAN-Routing deaktiviert – Referenzliste leer oder "
+                "CSV nicht gefunden (%s). Datei bleibt in output/.",
+                self.config.iban_reference_csv or '(kein Pfad konfiguriert)'
+            )
             return output_path
 
         found_ibans = self._extract_ibans_from_content(original_content)
-        has_match   = bool(found_ibans & ref_ibans)
+        matches     = found_ibans & ref_ibans
+        has_match   = bool(matches)
+
+        logger.debug(
+            "IBAN-Routing: Referenz=%d  Gefunden=%d  Treffer=%d  Matches=%s",
+            len(ref_ibans), len(found_ibans), len(matches),
+            ', '.join(sorted(matches)) if matches else '-'
+        )
 
         if has_match:
             target_dir = Path(self.config.available_path)
+            # Relativer Pfad → relativ zum Konfig-Verzeichnis
+            if not target_dir.is_absolute():
+                target_dir = self.config._config_dir / self.config.available_path
             logger.info(
-                "IBAN-Routing: Match gefunden %s → available/",
+                "IBAN-Routing: Match → available/  (%s)",
                 output_path.name
             )
         else:
             target_dir = Path(self.config.not_available_path)
+            if not target_dir.is_absolute():
+                target_dir = self.config._config_dir / self.config.not_available_path
             logger.info(
-                "IBAN-Routing: Kein Match %s → not_available/",
+                "IBAN-Routing: Kein Match → not_available/  (%s)",
                 output_path.name
             )
 
@@ -296,6 +314,7 @@ class PaymentAnonymizer:
             target = target_dir / f"{output_path.stem}_{ts}{output_path.suffix}"
 
         shutil.move(str(output_path), str(target))
+        logger.info("IBAN-Routing: Datei verschoben → %s", target)
         return target
 
     def process_file(self, input_path: Path) -> AnonymizationResult:
