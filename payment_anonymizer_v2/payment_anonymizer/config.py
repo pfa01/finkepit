@@ -214,6 +214,12 @@ class Config:
         return self.data['paths'].get('error_path', 'error/')
 
     @property
+    def routing_enabled(self) -> bool:
+        """IBAN-Routing aktivieren oder deaktivieren.
+        false = alle Dateien bleiben direkt in output/, keine Unterordner."""
+        return self.data.get('routing', {}).get('enabled', False)
+
+    @property
     def available_path(self) -> str:
         """Unterordner fuer anonymisierte Dateien deren IBAN in der Referenz-CSV steht."""
         return self.data.get('routing', {}).get(
