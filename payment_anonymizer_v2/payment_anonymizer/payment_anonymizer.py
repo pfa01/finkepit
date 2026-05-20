@@ -269,6 +269,11 @@ class PaymentAnonymizer:
         Gibt den neuen Pfad zurueck. Wenn Routing nicht konfiguriert
         (leere Referenzliste), wird output_path unveraendert zurueckgegeben.
         """
+        # Routing per Flag deaktiviert?
+        if not self.config.routing_enabled:
+            logger.debug("IBAN-Routing deaktiviert (routing.enabled=false).")
+            return output_path
+
         ref_ibans = self.reference_ibans
 
         if not ref_ibans:
