@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 analyse_input.py
@@ -322,6 +322,192 @@ def write_csv(rows: list, output_dir: Path) -> Path:
     return csv_path
 
 
+# ── Teil 4: Kontoverbindungs-Analyse ─────────────────────────────────────────
+
+IBAN_RE       = re.compile(r'\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b')
+BIC_RE        = re.compile(r'\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b')
+MT86_IBAN_RE  = re.compile(r'/IBAN/([A-Z]{2}\d{2}[A-Z0-9]{4,30})')
+MT86_BIC_RE   = re.compile(r'/BIC/([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)')
+MT86_NAME_RE  = re.compile(r'/(?:ABWA|ABWE|NAME|ENAM)/([^/\n]{2,70})')
+
+ISO_IBAN_TAGS = {'IBAN', 'PrtryAcct'}
+ISO_BIC_TAGS  = {'BICFI', 'BIC', 'MmbId'}
+
+MT_PARTY_FIELDS = {
+    ':25:', ':25A:', ':25P:',
+    ':50:', ':50A:', ':50F:', ':50K:',
+    ':52A:', ':52D:',
+    ':53A:', ':53B:', ':53D:',
+    ':54A:', ':54B:', ':54D:',
+    ':56A:', ':56D:',
+    ':57A:', ':57B:', ':57D:',
+    ':59:', ':59A:', ':59F:',
+}
+
+
+def _dedupe(values: list) -> str:
+    """Kommagetrennte eindeutige nicht-leere Werte."""
+    seen = []
+    for v in values:
+        v = v.strip()
+        if v and v not in seen:
+            seen.append(v)
+    return ', '.join(seen)
+
+
+def _extract_accounts_xml(file_path: Path) -> dict:
+    """Extrahiert IBANs, BICs und Namen aus einer ISO-20022-XML-Datei."""
+    result = {'ibans': [], 'bics': [], 'names': [], 'error': ''}
+    try:
+        if LXML_AVAILABLE:
+            root = etree.parse(str(file_path)).getroot()
+            for elem in root.iter():
+                try:
+                    local = etree.QName(elem.tag).localname
+                except Exception:
+                    continue
+                val = (elem.text or '').strip()
+                if not val:
+                    continue
+                if local in ISO_IBAN_TAGS and IBAN_RE.match(val):
+                    result['ibans'].append(val)
+                elif local in ISO_BIC_TAGS and BIC_RE.match(val):
+                    result['bics'].append(val)
+                elif local == 'Nm':
+                    result['names'].append(val)
+        else:
+            root = ET.parse(str(file_path)).getroot()
+            for elem in root.iter():
+                tag   = elem.tag
+                local = tag.split('}')[1] if '}' in tag else tag
+                val   = (elem.text or '').strip()
+                if not val:
+                    continue
+                if local in ISO_IBAN_TAGS and IBAN_RE.match(val):
+                    result['ibans'].append(val)
+                elif local in ISO_BIC_TAGS and BIC_RE.match(val):
+                    result['bics'].append(val)
+                elif local == 'Nm':
+                    result['names'].append(val)
+    except Exception as exc:
+        result['error'] = str(exc)
+    return result
+
+
+def _extract_accounts_mt(file_path: Path) -> dict:
+    """
+    Extrahiert IBANs, BICs und Namen aus einer SWIFT-MT-Datei.
+
+    Ausgewertete Felder:
+      :25:/:25A:  – Kontoidentifikation
+      :50x:       – Auftraggeber
+      :52x:–:57x: – Korrespondenzbanken
+      :59x:       – Begünstigter
+      :86:        – Subfelder /IBAN/, /BIC/, /ABWA/, /ABWE/, /NAME/, /ENAM/
+    """
+    result = {'ibans': [], 'bics': [], 'names': [], 'error': ''}
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='replace')
+        field_re = re.compile(
+            r':(\d{2}[A-Z]?):(.*?)(?=\n:\d{2}[A-Z]?:|\n-\}|$)',
+            re.DOTALL
+        )
+        for m in field_re.finditer(content):
+            tag   = f":{m.group(1)}:"
+            value = m.group(2).strip()
+
+            if tag in MT_PARTY_FIELDS:
+                for iban in IBAN_RE.findall(value):
+                    result['ibans'].append(iban)
+                for line in value.split('\n'):
+                    line = line.strip().lstrip('/')
+                    if BIC_RE.match(line):
+                        result['bics'].append(line)
+                    elif line and not IBAN_RE.match(line) and len(line) > 3:
+                        if not re.match(r'^[\d,./+\-]+$', line):
+                            result['names'].append(line)
+
+            if tag == ':86:':
+                result['ibans'] += MT86_IBAN_RE.findall(value)
+                result['bics']  += MT86_BIC_RE.findall(value)
+                result['names'] += [
+                    n.strip() for n in MT86_NAME_RE.findall(value)
+                ]
+    except Exception as exc:
+        result['error'] = str(exc)
+    return result
+
+
+def analyse_account_connections(source_dir: Path) -> list:
+    """
+    Analysiert alle XML- und MT-Dateien in source_dir rekursiv.
+    Pro Datei eine Zeile mit allen eindeutigen IBANs, BICs und Namen.
+    """
+    files = sorted(
+        p for p in source_dir.rglob('*')
+        if p.is_file() and p.suffix.lower() in ALL_EXTENSIONS
+    )
+    if not files:
+        logger.warning("Keine Dateien in '%s' gefunden.", source_dir)
+        return []
+
+    logger.info("Kontoverbindungen aus %d Datei(en) extrahieren ...", len(files))
+    rows = []
+    for file_path in files:
+        ext     = file_path.suffix.lower()
+        size_kb = round(file_path.stat().st_size / 1024, 1)
+
+        if ext in XML_EXTENSIONS:
+            msg_info = analyse_xml(file_path)
+            accounts = _extract_accounts_xml(file_path)
+        else:
+            msg_info = analyse_swift_mt(file_path)
+            accounts = _extract_accounts_mt(file_path)
+
+        ibans = _dedupe(accounts['ibans'])
+        bics  = _dedupe(accounts['bics'])
+        names = _dedupe(accounts['names'])
+        error = accounts['error'] or msg_info.get('error', '')
+
+        rows.append({
+            'Dateipfad':      str(file_path),
+            'Dateiname':      file_path.name,
+            'Nachrichtentyp': msg_info.get('message_type', ''),
+            'IBANs':          ibans,
+            'BICs':           bics,
+            'Namen':          names,
+            'Groesse_KB':     size_kb,
+            'Fehler':         error,
+        })
+        logger.info(
+            "  %-35s  %-12s  IBANs:%-3d  BICs:%-3d  Namen:%-3d%s",
+            file_path.name,
+            msg_info.get('message_type', '?'),
+            len(accounts['ibans']),
+            len(accounts['bics']),
+            len(accounts['names']),
+            f"  FEHLER: {error[:40]}" if error else ''
+        )
+    return rows
+
+
+def write_account_csv(rows: list, output_dir: Path) -> Path:
+    """Schreibt die Kontoverbindungs-Analyse in eine CSV mit Timestamp."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    csv_path  = output_dir / f"kontoverbindungen_{timestamp}.csv"
+    fieldnames = [
+        'Dateipfad', 'Dateiname', 'Nachrichtentyp',
+        'IBANs', 'BICs', 'Namen', 'Groesse_KB', 'Fehler'
+    ]
+    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
+        writer.writeheader()
+        writer.writerows(rows)
+    logger.info("CSV geschrieben: %s  (%d Zeilen)", csv_path, len(rows))
+    return csv_path
+
+
 # ── Hauptprogramm ─────────────────────────────────────────────────────────────
 
 def _print_summary(rows: list, csv_path: Path = None):
@@ -384,6 +570,16 @@ def main():
             'Ergebnis: analyse_JJJJMMTT_HHMMSS.csv im Output-Verzeichnis.'
         )
     )
+    action_group.add_argument(
+        '--analyse-output',
+        action='store_true',
+        help=(
+            'Alle Dateien im Quellordner (--source-dir) auf Kontoverbindungen '
+            'analysieren. Extrahiert IBANs, BICs und Namen aus XML- und '
+            'SWIFT-MT-Dateien. Durchsucht den Ordner rekursiv. '
+            'Ergebnis: kontoverbindungen_JJJJMMTT_HHMMSS.csv.'
+        )
+    )
 
     # ── Pfade ────────────────────────────────────────────────────────────
     path_group = parser.add_argument_group('Pfade')
@@ -399,7 +595,18 @@ def main():
         type=Path,
         default=None,
         metavar='PFAD',
-        help='Zielordner für die CSV-Datei (Standard: aktuelles Verzeichnis)'
+        help='Zielordner für die CSV-Dateien (Standard: aktuelles Verzeichnis)'
+    )
+    path_group.add_argument(
+        '--source-dir',
+        type=Path,
+        default=None,
+        metavar='PFAD',
+        help=(
+            'Quellordner für --analyse-output. '
+            'Standard: output/ im selben Verzeichnis wie input/. '
+            'Akzeptiert jeden beliebigen Pfad.'
+        )
     )
     path_group.add_argument(
         '--massentest-dir',
@@ -412,11 +619,11 @@ def main():
     args = parser.parse_args()
 
     # Mindestens eine Aktion muss angegeben sein
-    if not args.remove_files and not args.analyse_files:
+    if not args.remove_files and not args.analyse_files and not args.analyse_output:
         parser.print_help()
         print()
         print('Fehler: Bitte mindestens eine Aktion angeben '
-              '(--remove-files und/oder --analyse-files).')
+              '(--remove-files, --analyse-files und/oder --analyse-output).')
         sys.exit(1)
 
     input_dir  = args.input_dir
@@ -456,6 +663,56 @@ def main():
 
         csv_path = write_csv(rows, output_dir)
         _print_summary(rows, csv_path)
+
+
+    # ── Aktion 3: Kontoverbindungs-Analyse ──────────────────────────────
+    if args.analyse_output:
+        # Quellordner bestimmen
+        if args.source_dir:
+            source_dir = args.source_dir
+        else:
+            source_dir = input_dir.parent / 'output'
+
+        if not source_dir.exists():
+            logger.error(
+                "Quellordner für --analyse-output nicht gefunden: %s\n"
+                "Bitte --source-dir angeben.", source_dir
+            )
+            sys.exit(1)
+
+        print()
+        print('=' * 60)
+        print('  KONTOVERBINDUNGEN ANALYSIEREN  (--analyse-output)')
+        print(f'  Quelle: {source_dir}')
+        print('=' * 60)
+
+        account_rows = analyse_account_connections(source_dir)
+
+        if not account_rows:
+            logger.info("Keine Dateien zum Analysieren gefunden.")
+        else:
+            print()
+            print('=' * 60)
+            print('  CSV SCHREIBEN')
+            print('=' * 60)
+            csv_path = write_account_csv(account_rows, output_dir)
+
+            total_ibans = sum(
+                len(r['IBANs'].split(', ')) for r in account_rows if r['IBANs']
+            )
+            total_bics = sum(
+                len(r['BICs'].split(', ')) for r in account_rows if r['BICs']
+            )
+            errors = sum(1 for r in account_rows if r['Fehler'])
+            print()
+            print('=' * 60)
+            print(f"  Dateien analysiert:   {len(account_rows)}")
+            print(f"  IBANs gefunden:       {total_ibans}")
+            print(f"  BICs gefunden:        {total_bics}")
+            print(f"  Fehler:               {errors}")
+            print(f"  CSV: {csv_path}")
+            print('=' * 60)
+            print()
 
 
 if __name__ == '__main__':
