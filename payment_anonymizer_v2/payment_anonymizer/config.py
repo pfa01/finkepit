@@ -213,6 +213,62 @@ class Config:
         return self.data['paths'].get('error_path', 'error/')
 
     @property
+    def available_path(self) -> str:
+        """Unterordner fuer anonymisierte Dateien deren IBAN in der Referenz-CSV steht."""
+        return self.data.get('routing', {}).get(
+            'available_path', 'output/available/'
+        )
+
+    @property
+    def not_available_path(self) -> str:
+        """Unterordner fuer anonymisierte Dateien deren IBAN nicht in der Referenz-CSV steht."""
+        return self.data.get('routing', {}).get(
+            'not_available_path', 'output/not_available/'
+        )
+
+    @property
+    def iban_reference_csv(self) -> str:
+        """Pfad zur CSV-Datei mit den Referenz-IBANs.
+        Leer = Routing deaktiviert, Dateien bleiben in output/."""
+        return self.data.get('routing', {}).get('iban_reference_csv', '')
+
+    @property
+    def iban_csv_column(self) -> str:
+        """Spaltenname in der Referenz-CSV der die IBANs enthaelt."""
+        return self.data.get('routing', {}).get('iban_csv_column', 'IBAN')
+
+    def load_reference_ibans(self) -> set:
+        """
+        Liest alle IBANs aus der konfigurierten Referenz-CSV.
+        Gibt leere Menge zurueck wenn Routing nicht konfiguriert
+        oder die CSV-Datei nicht gefunden wird.
+        """
+        import logging, csv as _csv
+        log = logging.getLogger(__name__)
+        csv_path = self.iban_reference_csv
+        if not csv_path:
+            return set()
+        p = Path(csv_path)
+        if not p.exists():
+            log.warning(
+                "IBAN-Referenz-CSV nicht gefunden: %s – Routing deaktiviert.", p
+            )
+            return set()
+        ibans = set()
+        try:
+            with open(p, newline='', encoding='utf-8-sig') as f:
+                reader = _csv.DictReader(f, delimiter=';')
+                col = self.iban_csv_column
+                for row in reader:
+                    val = row.get(col, '').strip().upper()
+                    if val:
+                        ibans.add(val)
+            log.debug("Referenz-IBANs geladen: %d Eintraege aus %s", len(ibans), p)
+        except Exception as exc:
+            log.error("Fehler beim Lesen der IBAN-Referenz-CSV %s: %s", p, exc)
+        return ibans
+
+    @property
     def prefix(self) -> str:
         return self.data['file_handling']['prefix']
 
