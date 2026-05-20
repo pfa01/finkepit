@@ -367,6 +367,41 @@ MT86_KEY_ROLE = {
     'IBAN': 'Zahlung',      'BIC':  'Zahlung',
 }
 
+# ── Kategorisierung: Rolle → Auftraggeber / Empfaenger / Sonstige ─────────────
+# Dieses Mapping steuert die neuen CSV-Spalten "Auftraggeber_BIC" und
+# "Empfaenger_BIC". Jede Rolle wird genau einer Kategorie zugeordnet.
+# Rollen ohne Eintrag landen in keiner der beiden Spalten.
+ROLE_CATEGORY = {
+    # Auftraggeber-Seite (ISO 20022)
+    'Dbtr':               'Auftraggeber',
+    'DbtrAcct':           'Auftraggeber',
+    'DbtrAgt':            'Auftraggeber',
+    'InitgPty':           'Auftraggeber',
+    'UltmtDbtr':          'Auftraggeber',
+    'InstgAgt':           'Auftraggeber',
+    'Assgnr':             'Auftraggeber',
+    # Auftraggeber-Seite (SWIFT MT)
+    'Konto':              'Auftraggeber',
+    'Auftraggeber':       'Auftraggeber',
+    'Auftraggeberbank':   'Auftraggeber',
+    'KorrBank-Auftr':     'Auftraggeber',
+
+    # Empfaenger-Seite (ISO 20022)
+    'Cdtr':               'Empfaenger',
+    'CdtrAcct':           'Empfaenger',
+    'CdtrAgt':            'Empfaenger',
+    'UltmtCdtr':          'Empfaenger',
+    'InstdAgt':           'Empfaenger',
+    'Assgnee':            'Empfaenger',
+    # Empfaenger-Seite (SWIFT MT)
+    'Beguenstigter':      'Empfaenger',
+    'Empfaengerbank':     'Empfaenger',
+    'KorrBank-Empf':      'Empfaenger',
+
+    # Nicht zugeordnet (werden nicht in Auftraggeber/Empfaenger-Spalten aufgenommen)
+    # IntrmyAgt*, Intermediary, Zahlung, Beteiligter → landen nur in BICs/IBANs/Namen
+}
+
 
 def _fmt(role: str, value: str) -> str:
     """Formatiert einen Wert mit Rollen-Präfix: 'Dbtr:DE89...'"""
@@ -535,9 +570,10 @@ def analyse_account_connections(source_dir: Path) -> list:
     Analysiert alle XML- und MT-Dateien in source_dir rekursiv.
     Pro Datei eine Zeile mit allen Kontoverbindungen inkl. Rolle.
 
-    Format in der CSV: 'Dbtr:DE89... | Cdtr:DE27...'
-    Die Rolle entspricht dem ISO-20022-Tag (Dbtr, Cdtr, DbtrAgt ...)
-    bzw. der lesbaren Rollenbezeichnung bei SWIFT MT.
+    Format in der CSV:
+      IBANs/BICs/Namen: 'Dbtr:DE89... | Cdtr:DE27...'
+      Auftraggeber_BIC: BICs der Auftraggeber-Seite (via ROLE_CATEGORY)
+      Empfaenger_BIC:   BICs der Empfaenger-Seite  (via ROLE_CATEGORY)
     """
     files = sorted(
         p for p in source_dir.rglob('*')
@@ -565,24 +601,38 @@ def analyse_account_connections(source_dir: Path) -> list:
         names = _dedupe_tagged(accounts['names'])
         error = accounts['error'] or msg_info.get('error', '')
 
+        # BICs nach Kategorie aufteilen (via ROLE_CATEGORY-Mapping)
+        auftr_bics = []
+        empf_bics  = []
+        for role, bic in accounts['bics']:
+            cat = ROLE_CATEGORY.get(role)
+            bic = bic.strip()
+            if cat == 'Auftraggeber' and bic not in auftr_bics:
+                auftr_bics.append(bic)
+            elif cat == 'Empfaenger' and bic not in empf_bics:
+                empf_bics.append(bic)
+
         rows.append({
-            'Dateipfad':      str(file_path),
-            'Dateiname':      file_path.name,
-            'Nachrichtentyp': msg_info.get('message_type', ''),
-            'IBANs':          ibans,
-            'BICs':           bics,
-            'Namen':          names,
-            'Groesse_KB':     size_kb,
-            'Fehler':         error,
+            'Dateipfad':        str(file_path),
+            'Dateiname':        file_path.name,
+            'Nachrichtentyp':   msg_info.get('message_type', ''),
+            'IBANs':            ibans,
+            'BICs':             bics,
+            'Namen':            names,
+            'Auftraggeber_BIC': ', '.join(auftr_bics),
+            'Empfaenger_BIC':   ', '.join(empf_bics),
+            'Groesse_KB':       size_kb,
+            'Fehler':           error,
         })
         logger.info(
-            "  %-35s  %-12s  IBANs:%-3d  BICs:%-3d  Namen:%-3d%s",
+            "  %-35s  %-12s  IBANs:%-3d  BICs:%-3d  Auftr:%s  Empf:%s%s",
             file_path.name,
             msg_info.get('message_type', '?'),
             len(accounts['ibans']),
             len(accounts['bics']),
-            len(accounts['names']),
-            f"  FEHLER: {error[:40]}" if error else ''
+            ', '.join(auftr_bics) or '-',
+            ', '.join(empf_bics)  or '-',
+            f"  FEHLER: {error[:30]}" if error else ''
         )
     return rows
 
@@ -594,7 +644,9 @@ def write_account_csv(rows: list, output_dir: Path) -> Path:
     csv_path  = output_dir / f"kontoverbindungen_{timestamp}.csv"
     fieldnames = [
         'Dateipfad', 'Dateiname', 'Nachrichtentyp',
-        'IBANs', 'BICs', 'Namen', 'Groesse_KB', 'Fehler'
+        'IBANs', 'BICs', 'Namen',
+        'Auftraggeber_BIC', 'Empfaenger_BIC',
+        'Groesse_KB', 'Fehler'
     ]
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
