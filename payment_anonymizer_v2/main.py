@@ -16,7 +16,7 @@ Verwendung
 import argparse
 import sys
 
-from config import Config
+from payment_anonymizer.config import Config
 from payment_anonymizer import PaymentAnonymizer
 
 
