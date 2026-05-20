@@ -16,7 +16,6 @@ Verwendung
 import argparse
 import sys
 
-from payment_anonymizer.config import Config
 from payment_anonymizer.payment_anonymizer import PaymentAnonymizer
 
 
@@ -70,8 +69,7 @@ Beispiele:
     args = parser.parse_args()
 
     try:
-        config     = Config(args.config)
-        anonymizer = PaymentAnonymizer(config)
+        anonymizer = PaymentAnonymizer(args.config)
 
         if args.file:
             results = anonymizer.process_files(args.file)
