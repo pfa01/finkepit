@@ -331,7 +331,21 @@ MT86_BIC_RE  = re.compile(r'/BIC/([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)')
 MT86_NAME_RE = re.compile(r'/(?:ABWA|ABWE|NAME|ENAM)/([^/\n]{2,70})')
 MT86_KEY_RE  = re.compile(r'/(?P<key>ABWA|ABWE|NAME|ENAM|IBAN|BIC)/(?P<val>[^/\n]{1,70})')
 
-ISO_IBAN_TAGS = {'IBAN', 'PrtryAcct'}
+ISO_ACCT_DIRECT_TAGS = {'IBAN', 'BBAN'}
+# ^ Elemente die direkt den Kontowert enthalten
+
+ISO_ACCT_CONTAINER_TAGS = {'Othr', 'PrtryAcct'}
+# ^ Container-Elemente deren Kind-Tag <Id> den Kontowert enthält:
+#   DbtrAcct/Id/Othr/Id       → proprietäre Kontonummer
+#   DbtrAcct/Id/PrtryAcct/Id  → proprietäre Kontonummer (alternatives Format)
+
+ISO_ACCT_ROLE_TAGS = {
+    # Konto-Rollen – nur diese werden als Kontonummer-Kontext akzeptiert.
+    # Verhindert, dass PrvtId/Othr/Id (Personen-ID) als Konto erkannt wird.
+    'DbtrAcct', 'CdtrAcct',
+    'IntrmyAgt1Acct', 'IntrmyAgt2Acct', 'IntrmyAgt3Acct',
+}
+
 ISO_BIC_TAGS  = {'BICFI', 'BIC', 'MmbId'}
 
 # ISO 20022: Bekannte Rollen-Tags (Eltern-Elemente der Datenfelder)
@@ -450,12 +464,17 @@ def _find_role_ancestor(elem, get_local) -> str:
 
 def _extract_accounts_xml(file_path: Path) -> dict:
     """
-    Extrahiert IBANs, BICs und Namen mit Rollen-Tags aus einer
-    ISO-20022-XML-Datei.
+    Extrahiert Kontoverbindungen (IBANs/Kontonummern), BICs und Namen
+    mit Rollen-Tags aus einer ISO-20022-XML-Datei.
 
-    Jeder Wert erhält den Rollen-Tag seines Elternbaums als Präfix,
-    z.B. 'Dbtr', 'Cdtr', 'DbtrAgt'. Das ermöglicht die eindeutige
-    Zuordnung als Auftraggeber oder Zahlungsempfänger.
+    Erkannte Kontoidentifikations-Formate in DbtrAcct/CdtrAcct/IntrmyAgtxAcct:
+      <Id><IBAN>DE89...</IBAN></Id>                   → IBAN-Format
+      <Id><BBAN>12345678901234</BBAN></Id>             → BBAN-Format
+      <Id><Othr><Id>123456789</Id></Othr></Id>         → Proprietäre Nr. via Othr
+      <Id><PrtryAcct><Id>KONTO-42</Id></PrtryAcct></Id>→ Proprietäre Nr. via PrtryAcct
+
+    Nicht erfasst: PrvtId/Othr/Id und OrgId/Othr/Id (Personen-/Firmen-IDs,
+    kein Konto) – die Unterscheidung erfolgt über ISO_ACCT_ROLE_TAGS.
     """
     result = {'ibans': [], 'bics': [], 'names': [], 'error': ''}
     try:
@@ -468,20 +487,49 @@ def _extract_accounts_xml(file_path: Path) -> dict:
                 except Exception:
                     return ''
 
+            def find_acct_role(elem):
+                """Gibt Konto-Rollen-Ancestor zurück oder '' wenn keiner."""
+                node = elem.getparent() if hasattr(elem, 'getparent') else None
+                while node is not None:
+                    local = get_local(node)
+                    if local in ISO_ACCT_ROLE_TAGS:
+                        return local
+                    # Stoppt wenn ein anderer Rollen-Tag gefunden wird
+                    if local in ISO_ROLE_TAGS:
+                        return ''
+                    node = node.getparent() if hasattr(node, 'getparent') else None
+                return ''
+
             for elem in root.iter():
                 local = get_local(elem)
                 val   = (elem.text or '').strip()
                 if not val:
                     continue
-                if local in ISO_IBAN_TAGS and IBAN_RE.match(val):
+
+                # IBAN / BBAN: direkter Kontoidentifikator
+                if local in ISO_ACCT_DIRECT_TAGS:
                     role = _find_role_ancestor(elem, get_local)
                     result['ibans'].append((role, val))
+
+                # Othr/Id und PrtryAcct/Id: proprietäre Kontonummer
+                elif local == 'Id':
+                    parent_local = get_local(elem.getparent()) \
+                                   if elem.getparent() is not None else ''
+                    if parent_local in ISO_ACCT_CONTAINER_TAGS:
+                        acct_role = find_acct_role(elem)
+                        if acct_role:
+                            result['ibans'].append((acct_role, val))
+
+                # BIC / BICFI
                 elif local in ISO_BIC_TAGS and BIC_RE.match(val):
                     role = _find_role_ancestor(elem, get_local)
                     result['bics'].append((role, val))
+
+                # Name
                 elif local == 'Nm':
                     role = _find_role_ancestor(elem, get_local)
                     result['names'].append((role, val))
+
         else:
             root = ET.parse(str(file_path)).getroot()
 
@@ -489,7 +537,6 @@ def _extract_accounts_xml(file_path: Path) -> dict:
                 t = e.tag
                 return t.split('}')[1] if '}' in t else t
 
-            # ET hat kein getparent() – Parent-Map aufbauen
             parent_map = {c: p for p in root.iter() for c in p}
 
             def find_role_et(elem):
@@ -502,13 +549,31 @@ def _extract_accounts_xml(file_path: Path) -> dict:
                 p = parent_map.get(elem)
                 return get_local_et(p) if p is not None else '?'
 
+            def find_acct_role_et(elem):
+                node = parent_map.get(elem)
+                while node is not None:
+                    local = get_local_et(node)
+                    if local in ISO_ACCT_ROLE_TAGS:
+                        return local
+                    if local in ISO_ROLE_TAGS:
+                        return ''
+                    node = parent_map.get(node)
+                return ''
+
             for elem in root.iter():
                 local = get_local_et(elem)
                 val   = (elem.text or '').strip()
                 if not val:
                     continue
-                if local in ISO_IBAN_TAGS and IBAN_RE.match(val):
+                if local in ISO_ACCT_DIRECT_TAGS:
                     result['ibans'].append((find_role_et(elem), val))
+                elif local == 'Id':
+                    parent = parent_map.get(elem)
+                    if parent is not None and \
+                            get_local_et(parent) in ISO_ACCT_CONTAINER_TAGS:
+                        acct_role = find_acct_role_et(elem)
+                        if acct_role:
+                            result['ibans'].append((acct_role, val))
                 elif local in ISO_BIC_TAGS and BIC_RE.match(val):
                     result['bics'].append((find_role_et(elem), val))
                 elif local == 'Nm':
