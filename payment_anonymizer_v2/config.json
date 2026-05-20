@@ -321,6 +321,8 @@
   },
   "routing": {
     "_comment": "Steuert das Routing anonymisierter Dateien in available/ oder not_available/. iban_reference_csv: Pfad zur CSV-Datei mit Referenz-IBANs. Leer lassen um das Routing zu deaktivieren.",
+    "_comment_enabled": "Routing aktivieren/deaktivieren. false = alle Dateien bleiben in output/ ohne Unterordner.",
+    "enabled": true,
     "iban_reference_csv": "reference_ibans.csv",
     "iban_csv_column": "IBAN",
     "available_path": "output/available/",
